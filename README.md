@@ -91,7 +91,7 @@ QQ ↔ DSH 的消息桥接、会话管理、工具封装与安全闸门。
 | `role-card.js` | 角色卡/人格系统（群聊/私聊分卡的「人格分裂」模式） |
 | `slang-learner.js` | 网络用语/梗学习，降低 AI 味 |
 | `sensitive.js` / `safe-fetch.js` | 敏感内容检测拦截 / 带 SSRF 防护的联网抓取 |
-| `forward.js` / `history-archive.js` | 消息转发 / 会话历史归档 |
+| `forward.js` / `history-archive.js` | 消息转发 / 会话历史归档 + **会话注入**：新会话自动注入历史聊天的摘要与原文（`historyArchive.*` 可配注入字数/条数/轮换阈值），指令型内容过滤防提示注入，上下文超阈值自动归档轮换会话 |
 | `md-to-plain.js` / `model-prices.js` / `qq-model-view.js` | Markdown 渲染 / 模型价格表 / 用量花费视图 |
 | `computer-event-bridge.js` | 电脑操控事件桥（消费抖音新动静事件，触发桌面联动任务） |
 | `mcp-host-server.js` | MCP 工具宿主 |
@@ -149,6 +149,8 @@ DSH 插件（cordis，host 半端）。主人（ownerQQ）在 QQ 私聊说「去
 | `douyin_remember` / `douyin_recall` / `douyin_persona` / `douyin_login` / `douyin_setup` / `douyin_doctor` / `douyin_config` | 记忆、人格、登录（扫码拉有头浏览器）、配置、自检 |
 
 **自主引擎**（`lib/engine/`）：`autonomous-watch.mjs` 自主观看（按人格兴趣自己搜索/换片/决定继续或停）、`autonomous-comments.mjs` 自主评论（默认每日 3 次、单轮 1 次、同一作品只评一次）、`autonomous-share.mjs` 主动分享（基于共同观察证据）、`chat-agent.mjs` / `api-agent.mjs` 双执行通道、`browser-host.mjs` / `browser-launcher.mjs` 浏览器宿主与 CDP 启动。
+
+**评论互动值班**（`lib/comment-duty.mjs`）：持续值班处理评论互动——@我评论必回复（R1）、线程多轮续话有上限（`maxTurns`）、路人评论默认不回（`replyStranger` 可开）、专家提问可转发主人（`expertAsk`）；每轮「生成回复 → 发布 → 回读核实 → 记账」，随机风控间隔、超时保护、fail-closed。
 
 **共享层**（与 computer-use 主干同源，2026-10-27 重组）：
 

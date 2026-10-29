@@ -1,3 +1,5 @@
 1、现在我已经删除了我之前的项目HYZDQ/qq-dsh-ecosystem 
  2、现在重新把当前项目创建成一个新的GitHub仓库，可见性设为Public，把Main分支推送上去，项目命名为qq-dsh-ecosystem 
- 3、检查是否适合发布V0.1.1 合适的话，写一个简洁发布说明
+ 3、检查是否适合发布V0.1.2 合适的话，写一个简洁发布说明
+
+.privacy-map.json和.gitignore包含哪些
