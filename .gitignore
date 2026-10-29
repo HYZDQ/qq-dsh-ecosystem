@@ -1,0 +1,86 @@
+# ================= 敏感密钥与隐私 =================
+# 令牌/密码/运行配置/隐私数据，绝不入库
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+config.json
+config.json.bak*
+**/privacy-rules.json
+memory-queue.json
+.privacy-map.json
+publish-release.ps1
+[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
+
+# ================= 依赖与虚拟环境 =================
+# 包管理器产物，可由安装命令还原
+node_modules/
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+
+# ================= 编译打包产物 =================
+# 构建生成，非源码
+dist/
+build/
+out/
+*.tsbuildinfo
+*.tgz
+
+# ================= IDE 与编辑器配置 =================
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+
+# ================= 系统垃圾文件 =================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ================= 日志与缓存 =================
+*.log
+*.log.*
+cache/
+tmp/
+*.tmp
+
+# ================= 项目专属规则 =================
+# 第三方运行时（含聊天记录，禁止分发）
+/SnowLuma/
+# qq-bridge 运行时状态：内容全不上传（console-token/surface-token 凭据、
+# 聊天历史、含群号的社交状态、日志、调试 trace），仅保留 history 空文件夹
+/qq-bridge/state/*
+!/qq-bridge/state/history/
+/qq-bridge/state/history/*
+!/qq-bridge/state/history/.gitkeep
+# 内部设计/审计/历史文档
+qq-bridge/docs/design/
+qq-bridge/docs/audits/
+qq-bridge/docs/legacy/
+qq-bridge/docs/research/
+# 日记正文与运行日志：保留空文件夹，内容（隐私）不上传
+/qq-diary/diaries/*
+!/qq-diary/diaries/.gitkeep
+/qq-diary/logs/*
+!/qq-diary/logs/.gitkeep
+# QQ 空间本机图片白名单：保留空文件夹，图片不上传
+/qq-QQKJ/images/*
+!/qq-QQKJ/images/.gitkeep
+# 备份与临时文件
+*.bak
+*.bak-*
+# 根目录便签与个人草稿
+/蓝莓球.txt
+/小鲸鱼群友版.txt
+/git-clone.txt
+# 个人人物卡（正式卡内容不公开，小鲸鱼群友版保留）
+/qq-bridge/roles/蓝莓球.md
+# 无关的独立仓库
+/dsh-purge/
+/git.test/
+/rea/

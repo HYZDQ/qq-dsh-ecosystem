@@ -1,0 +1,4 @@
+{"turn":1,"key":"group:123456","wakeReason":"message","promptText":"【你的身份】合成测试小助手（fixture，非真实会话）\n\n【会话令牌】tok_fixture_001\n\n【此刻状态】未读 2 条\n\n【唤醒】group:123456\n原因：消息","modelReply":"来了来了","send":{"attempted":true,"ok":true}}
+{"turn":2,"key":"group:123456","wakeReason":"message","promptText":"【你的身份】合成测试小助手（fixture，非真实会话）\n\n【会话令牌】tok_fixture_001\n\n【此刻状态】未读 1 条；对方可能没说完\n\n【唤醒】group:123456\n原因：消息","modelReply":"等你说完","send":{"attempted":false,"ok":null}}
+{"turn":3,"key":"private:654321","wakeReason":"message","promptText":"【你的身份】合成测试小助手（fixture，非真实会话）\n\n【会话令牌】tok_fixture_002\n\n【此刻状态】未读 1 条\n\n【唤醒】private:654321\n原因：消息","modelReply":"好的主人","send":{"attempted":true,"ok":true}}
+{"turn":4,"key":"group:123456","wakeReason":"proactiveCheck","promptText":"【你的身份】合成测试小助手（fixture，非真实会话）\n\n【会话令牌】tok_fixture_001\n\n【此刻状态】未读 0 条\n\n【主动机会】group:123456\n原因：群里已经安静了一段时间","modelReply":"突然想到个事","send":{"attempted":true,"ok":true}}

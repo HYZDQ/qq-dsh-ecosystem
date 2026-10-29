@@ -1,0 +1,63 @@
+{
+  "name": "dsh-douyin-agent",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "刷抖音插件（唯一抖音工具面：刷流/私信/评论/分享/自主观看/额度）+ QQ 私聊指挥；作为抖音分支接入电脑操控主干",
+  "license": "MIT",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=22.13",
+    "dsh": ">=0.2.0-rc.2 <0.3.0"
+  },
+  "os": [
+    "win32"
+  ],
+  "scripts": {
+    "check": "node --check index.js && node --check client.js",
+    "doctor": "node tools/doctor.mjs"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "lib",
+    "tools",
+    "prompts",
+    "README.md"
+  ],
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "@playwright/mcp": "^0.0.34",
+    "playwright": "^1.49.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": "^0.2.0-rc.2",
+    "@deepseek-ai/schemastery": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
+      ]
+    }
+  }
+}

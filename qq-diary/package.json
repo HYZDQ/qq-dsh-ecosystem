@@ -1,0 +1,22 @@
+{
+  "name": "qq-diary",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "每天 22:00 自动为 QQ 角色写一篇日记：只读 qq-bridge 的上下文，调用大模型生成 200~400 字第一人称日记，写完给主人发一句摘要。",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "once": "node index.js --once",
+    "check": "node index.js --check",
+    "dry": "node index.js --dry-run",
+    "list": "node index.js --list",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  }
+}

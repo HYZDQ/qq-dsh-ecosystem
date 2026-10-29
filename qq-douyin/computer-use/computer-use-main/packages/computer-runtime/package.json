@@ -1,0 +1,21 @@
+{
+  "name": "@dsh/computer-runtime",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "通用电脑操控运行时（桌面 UIA + 网页 DOM + 视觉兜底 + 任务自治 + 安全闸门）。绞杀者阶段 B：随插件内嵌分发，阶段 C 发布 npm 并改裸导入。",
+  "license": "MIT",
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./computer/*": "./computer/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.mjs",
+    "package.json",
+    "computer/"
+  ],
+  "engines": {
+    "node": ">=22.13"
+  }
+}

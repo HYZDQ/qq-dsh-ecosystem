@@ -1,0 +1,16 @@
+# 本机配置（含可能的明文 apiKey，绝不提交）
+config.json
+
+# 运行期数据（保留空文件夹，内容不入库）
+diaries/*
+!diaries/.gitkeep
+logs/*
+!logs/.gitkeep
+state/
+node_modules/
+*.log
+
+# 编辑器
+.idea/
+.vscode/
+*.tmp

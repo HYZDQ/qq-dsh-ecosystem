@@ -1,0 +1,18 @@
+# ============================================================================
+# computer-use —— DSH bundle patch（插件自带的挂载声明）
+# ============================================================================
+# 形状必须是 patch 列表项 [{ insert: [...] }]（对齐 dsh-douyin-agent-v2 的写法；
+# 裸 map 会被 DSH 启动校验剪掉整个 bundle——2026-10-27 现网踩坑）。
+# 装：
+#   dsh plugin --profile desktop add link:<本目录绝对路径>
+# 或在 profile 的 package.json 里加依赖 + 往 dsh.profile.bundles 追加 "computer-use"
+# 🔴 id 必须等于命名空间名（douyin-browser）：设置页 volatile 写入依赖它。
+#    包名 2026-10-27 由 dsh-douyin-browser-local 改为 computer-use。
+# ============================================================================
+
+- insert:
+    - id: douyin-browser
+      name: computer-use
+      config:
+        computer:
+          enabled: true

@@ -1,0 +1,15 @@
+# ============================================================================
+# dsh-douyin-agent —— DSH bundle patch（插件自带的挂载声明）
+# ============================================================================
+# 装：
+#   dsh plugin --profile desktop add link:<本目录绝对路径>
+# 或在 profile 的 package.json 里加依赖 + 往 dsh.profile.bundles 追加 "dsh-douyin-agent"
+#
+# 🔴 id 必须等于命名空间名（douyin-agent）：设置页 volatile 写入依赖它。
+# ============================================================================
+
+- insert:
+    - id: douyin-agent
+      name: dsh-douyin-agent
+      config:
+        enabled: true

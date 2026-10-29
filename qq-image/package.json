@@ -1,0 +1,19 @@
+{
+  "name": "qq-image",
+  "version": "0.2.0-r4",
+  "private": true,
+  "description": "qq-bridge 的网络图片检索插件：provider 检索 + 视觉挑选 + 经桥接发送。依赖 qq-bridge 的 safe-fetch/web-search 与桥接端点；本包只提供 image-search 内核与 stdio MCP server。",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "test": "node scripts/test-image-search.mjs",
+    "test:endpoints": "node scripts/test-image-endpoints.mjs",
+    "test:e2e": "node scripts/test-image-search-e2e.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.4.3"
+  }
+}

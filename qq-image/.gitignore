@@ -1,0 +1,5 @@
+# 依赖（由 `npm install` 生成，不入库）
+node_modules/
+npm-debug.log*
+# 运行时不需要的缓存
+.npm-cache/

@@ -1,0 +1,53 @@
+{
+  "qqBridgeDir": "D:\\github\\qq-bridge",
+  "diaryDir": "D:\\github\\qq-diary\\diaries",
+  "diaryFile": "diary.md",
+  "logDir": "D:\\github\\qq-diary\\logs",
+  "timezone": "Asia/Shanghai",
+  "writeAt": "22:00",
+  "lookbackHours": 24,
+  "maxContextChars": 10000,
+  "privateShare": 0.6,
+  "includeGroups": true,
+  "includeOtherPrivates": false,
+  "maxPerConversationChars": 3000,
+  "minDiaryChars": 200,
+  "maxDiaryChars": 400,
+  "model": "deepseek-v4-flash",
+  "baseURL": "https://api.deepseek.com/anthropic/v1",
+  "apiKey": "",
+  "apiKeyEnv": "DEEPSEEK_API_KEY",
+  "timeoutMs": 120000,
+  "maxRetries": 2,
+  "redactPatterns": true,
+  "notifyOwner": {
+    "enabled": true,
+    "maxChars": 80,
+    "template": "📔 {date} 日记已写好：{summary}",
+    "retryMax": 3,
+    "channels": [
+      "snowluma",
+      "bridge"
+    ],
+    "timeoutMs": 15000
+  },
+  "maxRoleChars": 3000,
+  "maxMessageChars": 300,
+  "maxTokens": 1600,
+  "activityLogLines": 100,
+  "maxActivityChars": 1500,
+  "maxTopicsChars": 500,
+  "maxImpressionsChars": 400,
+  "tickMs": 60000,
+  "retryDelayMs": 900000,
+  "maxDailyRetries": 2,
+  "dryRunCallsLlm": false,
+  "maxWritesPerDay": 3,
+  "surface": {
+    "enabled": false,
+    "contextSource": "v2",
+    "writeMemory": false,
+    "deferIfActiveMinutes": 0,
+    "maxDeferMinutes": 60
+  }
+}
