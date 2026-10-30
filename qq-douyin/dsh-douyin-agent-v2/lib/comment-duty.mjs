@@ -66,11 +66,11 @@ export function sanitizeReply(text, maxLen = 60) {
 }
 
 export class CommentDuty {
-  constructor({ stateDir, browse, publish, askDoubao, fetchComments, fetchAtMe, generate, notify, now = Date.now, onEvent = () => {} }) {
+  constructor({ stateDir, browse, publish, askDoubao, fetchComments, fetchAtMe, fetchVideoDetail, captureFrames, generate, notify, now = Date.now, onEvent = () => {} }) {
     for (const [name, fn] of Object.entries({ browse, publish, askDoubao, fetchComments, fetchAtMe, generate })) {
       if (typeof fn !== 'function') throw new Error(`评论互动缺少 ${name} 依赖。`)
     }
-    Object.assign(this, { stateDir, browse, publish, askDoubao, fetchComments, fetchAtMe, generate, notify: notify || (async () => {}), now, onEvent })
+    Object.assign(this, { stateDir, browse, publish, askDoubao, fetchComments, fetchAtMe, fetchVideoDetail, captureFrames, generate, notify: notify || (async () => {}), now, onEvent })
     this.configFile = path.join(stateDir, 'comment-duty.json')
     this.threadsFile = path.join(stateDir, 'comment-threads.json')
     this.timer = null
@@ -145,6 +145,21 @@ export class CommentDuty {
           if (!cache.has(awemeId)) cache.set(awemeId, await this.fetchComments(cdp, awemeId, { pages: 2 }))
           return cache.get(awemeId)
         }
+        // 回复前先“看一眼这条视频”：取作品标题/作者/简介进生成上下文（2026-10-29 使用者要求）。
+        const videoOf = async (awemeId) => {
+          if (!this.fetchVideoDetail) return null
+          const key = `v:${awemeId}`
+          if (!cache.has(key)) cache.set(key, await this.fetchVideoDetail(cdp, awemeId).catch(() => null))
+          const v = cache.get(key)
+          return v?.video ? { title: v.video.title || '', author: v.video.author || '', duration: v.video.duration_s ?? null } : null
+        }
+        // 画面采样（2026-10-29 升级）：回复前抓 2 帧视频画面，喂给能看画面的模型；抓不到退回文字。
+        const framesOf = async (awemeId) => {
+          if (typeof this.captureFrames !== 'function') return []
+          const key = `f:${awemeId}`
+          if (!cache.has(key)) cache.set(key, await this.captureFrames({ awemeId }).catch(() => []))
+          return cache.get(key) || []
+        }
         const day = new Date(this.now()).toISOString().slice(0, 10)
 
         // ④ 通用回复动作：生成 → 发布 → 回读核实 → 记账（超时兜底用固定话术，不走模型）
@@ -153,7 +168,7 @@ export class CommentDuty {
           if (timeout) text = '这个问题我暂时答不好，回头研究明白了再来聊。'
           else {
             let out
-            try { out = await this.generate({ commentText: question, commentUser: questionUser, isOwner, expertAnswer }) }
+            try { out = await this.generate({ commentText: question, commentUser: questionUser, isOwner, expertAnswer, video: await videoOf(awemeId), frames: timeout ? [] : await framesOf(awemeId) }) }
             catch (error) { this.onEvent({ type: 'comment_duty.generate_failed', message: error.message || String(error) }); return null }
             text = sanitizeReply(out?.reply)
             if (!text) {

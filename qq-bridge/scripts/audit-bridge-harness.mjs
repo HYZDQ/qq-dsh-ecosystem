@@ -24,6 +24,7 @@ import * as stateAcl from '../src/state-acl.mjs';
 import * as imageSearch from '../../qq-image/src/image-search.js';
 import * as qzone from '../src/qzone.js';
 import * as historyArchive from '../src/history-archive.js';
+import * as ttsClient from '../src/tts-client.js';
 // 三代仿真模块（GEN3）：bridge.js 顶层 import 在 VM 里会被剥离，必须在这里注入同名绑定。
 import * as simulationTrace from '../src/simulation/trace.js';
 import * as simulationRhythm from '../src/simulation/rhythm.js';
@@ -196,6 +197,19 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     ...imageSearch,
     ...qzone,
     ...historyArchive,
+    // 本地语音合成（TTS）：bridge 顶层 import 在 VM 里被剥离，这里注入真实实现。
+    // 注意：normalizeTtsConfig / preprocessTtsText 是纯函数，测试可以直接断言；
+    // createTtsClient 只有在真的合成时才发 HTTP —— 测试里 tts.enabled 默认 false，
+    // 因此不会真的去连 WSL 的 sidecar。
+    createTtsClient: ttsClient.createTtsClient,
+    normalizeTtsConfig: ttsClient.normalizeTtsConfig,
+    preprocessTtsText: ttsClient.preprocessTtsText,
+    stripUnknownBracketTags: ttsClient.stripUnknownBracketTags,
+    TTS_CODES: ttsClient.TTS_CODES,
+    TtsError: ttsClient.TtsError,
+    // 电脑操控事件桥（QQ 会话映射发布）：会写真实 home 目录下的文件，测试里必须无副作用。
+    publishQqSessionMap: () => false,
+    dropQqMessageEvent: () => false,
     // GEN3 仿真绑定：bridge 里 `sim*` 前缀是别名 import，这里必须显式改成 bridge 使用的名字。
     buildTurnRecord: simulationTrace.buildTurnRecord,
     createTraceWriter: simulationTrace.createTraceWriter,

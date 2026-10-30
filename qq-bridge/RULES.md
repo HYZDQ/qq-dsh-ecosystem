@@ -42,6 +42,7 @@
    - ✅ `mcp__web-search-safe__web_fetch` 已做 SSRF 加固：仅 http/https、禁止 localhost/私有 IP/链路本地/CGNAT/带凭据 URL、DNS 解析结果全量校验、每跳重定向重新校验、响应体限量读取。
 4. **发送强制白名单**：所有发送类工具（`qq_send_group_message` / `qq_send_private_message` / `qq_send_message` / `qq_send_burst` / `qq_reply` / `qq_send_poke` / `qq_send_sticker` / `qq_send_voice` / `mcp__image__image_send` 等）的目标必须命中 `config.json` 的 `allow.groups` / `allow.private`，否则拒绝执行。图片发送还额外要求「目标必须是已有桥接会话（一代模式）」并经过 https/Content-Type/magic bytes/大小/像素/总大小校验。
    - **语音额外收紧**：`qq_send_voice` 只能发**语音库**（`socialV2.voice.dir`，默认 `qq-bridge/audio/`）里的文件，不能发任意本地路径、URL 或 base64（防 prompt injection 拿本机文件当语音外发）；另有独立的时长/体积/频率上限（`socialV2.voice.*`），额度与文本发送分开计数。详见 [docs/guides/VOICE.md](docs/guides/VOICE.md)。
+   - **本地语音合成（TTS）额外收紧**：`qq_tts_say` 只在 `tts.enabled=true` + 语音总开关 + `tools.sendVoice` 三个闸门都开着时才注册（默认全关）；产物只能落在语音库的 `tts/` 子目录内（sidecar 与桥接各校验一次，库外路径直接拒收），克隆音色的参考音频只能来自 `state/tts-refs/`（控制台可上传本人授权音色，**不进语音库**）；`tts.baseUrl` 非回环会被强制回退，**不接任何云端 TTS**；合成失败**不重试**，直接让模型改打字；主动冒泡不发语音。详见 [docs/guides/TTS.md](docs/guides/TTS.md)。
    - **空间说说（`mcp__qzone__*`）** 没有目标会话（只发到机器人**自己**的 QQ 空间），因此不走 `allow.groups` / `allow.private`；它改用**更严的 owner-only + `confirm=true` + 一次性草稿 + 可见范围白名单 + 图片白名单 + 强制审计 + 7 天去重 + 每日上限**约束，详见下方 qzone 专节。
 5. **发送禁令（模型层）**：persona 明确规定只有「管理端明确指示」或「【管理员】标记的明确要求」才可使用发送工具；禁止写"我已回复/消息已发送（message_id）"类汇报。空间说说同理：只有 **owner 私聊明确要求**才可起草；发布前必须先把草稿（正文 + 可见范围）给主人确认，拿到明确同意后才 `qzone_publish`；**不得伪造「已发布」或编造 tid**。
 6. **回复审计（桥接层硬拦截）**：agent 回复文本若包含本机路径（`C:\`、`/home/` 等）或凭据特征（token/password/secret/api key 等）→ **整条拦截不发送**，并告知"被安全策略拦截"。

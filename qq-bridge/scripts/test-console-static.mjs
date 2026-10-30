@@ -18,7 +18,8 @@ console.log('## 元素 ID');
 const ids = [...html.matchAll(/\sid="([A-Za-z0-9_-]+)"/g)].map((m) => m[1]);
 const dups = [...new Set(ids.filter((v, i) => ids.indexOf(v) !== i))];
 ok(dups.length === 0, 'ID 唯一', dups.length ? `重复：${dups.join(', ')}` : `共 ${ids.length} 个`);
-for (const id of ['voiceList', 'voiceRefreshBtn', 'voiceSendBtn', 'voiceSendTarget', 'voiceSendDryRun', 'voiceMsg']) {
+// 语音面板只保留真正在用的元素：失败关闭的「只校验不发送」已被移除（试发即真发，校验走 AI 通道日志）。
+for (const id of ['voiceList', 'voiceRefreshBtn', 'voiceSendBtn', 'voiceSendTarget', 'voiceMsg', 'voiceFileCount']) {
   const n = (html.match(new RegExp(`id="${id}"`, 'g')) ?? []).length;
   ok(n === 1, `语音面板元素 ${id}`, `${n} 处`);
 }

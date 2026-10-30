@@ -105,6 +105,14 @@ QQ ↔ DSH 的消息桥接、会话管理、工具封装与安全闸门。
 - **安全**：`auditQzoneText` 发布前审计正文敏感内容、`auditQzoneImageUrl` 校验配图、本机图片白名单校验；起草走专用预设 `qzone-writer`
 - 配置集中在 `config.json` 的 `qzone.*`，默认关闭（`enabled: false`），完整字段见 [docs/guides/QZONE.md](qq-bridge/docs/guides/QZONE.md)
 
+**可组合记忆（dsh-mnemon）** —— 机器人的**长期记忆引擎**（DSH 插件 `dsh-mnemon-source-runtime`，随 DSH 桌面 profile 安装）：
+
+- **是什么**：跨会话的「长期记忆本」——机器人记得主人、群友、约定、偏好和梗。控制台可视化容量/条数/写入保护，搜索优先走 Redis 向量检索
+- **AI 可主动使用**：提示词挂载【你的长期记忆本（dsh-mnemon，可主动使用）】，**不限条数、不限频率、想记就记**（唯一限制：不记密钥/密码/token 明文）；工具面只放行「记/查/状态」三层
+- **三代仿真的记忆层**（`src/simulation/memory-mnemon.js`）：mnemon 存正文（`branches:["v3"]` 分区，可整区隐藏/逐条回滚）+ 桥接 sidecar 存元数据（trust/scope/来源消息，唯一真相源）；V2 会话记忆**自动沉淀**为长期记忆 → **每日巩固**（归档已不成立的、升格重要的）→ 新会话唤醒时注入【长期记忆】
+- **安全**：`trust=untrusted` 拒绝写入、shadow 只读期不落盘、写入保护命名空间、记忆对账幂等（重复同步不产生写入）
+- **与会话注入的分工**：会话注入（`history-archive.js`）管「**最近聊了什么**」（历史归档摘要），长期记忆（dsh-mnemon）管「**一直记得什么**」（跨会话的人与事）
+
 **其他目录**
 
 | 模块 | 功能 |

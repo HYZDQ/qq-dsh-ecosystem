@@ -34,6 +34,7 @@
     "test-voice": "node scripts/test-voice.mjs",
     "test-voice:gui": "node scripts/test-voice-gui.mjs",
     "test-voice:system": "node scripts/test-voice-system.mjs",
+    "test-tts": "node scripts/test-tts-client.mjs && node scripts/test-tts-say.mjs && node scripts/test-tts-voices.mjs && node scripts/test-tts-contract.mjs",
     "test-encoding": "node scripts/test-encoding.mjs",
     "send-voice": "node scripts/send-voice.mjs",
     "voice-gui": "cd ../voice-tool && node voice-gui.mjs",

@@ -183,6 +183,59 @@
       transition: background .15s, border-color .15s, color .15s
     }
 
+    /* 原生 <input type="file"> 的按钮不继承上面的样式，会变成一块灰疙瘩；
+       这里把 ::file-selector-button 拉到和 button 一样的外观。 */
+    input[type=file] {
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      max-width: 100%;
+    }
+
+    input[type=file]::file-selector-button,
+    input[type=file]::-webkit-file-upload-button {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      color: var(--text);
+      padding: 8px 14px;
+      margin-right: 10px;
+      font: inherit;
+      font-size: 13px;
+      cursor: pointer;
+      transition: background .15s, border-color .15s;
+    }
+
+    input[type=file]::file-selector-button:hover,
+    input[type=file]::-webkit-file-upload-button:hover {
+      background: var(--surface-hover);
+      border-color: var(--accent-border-soft-hover);
+    }
+
+    /* 折叠区分组标题右侧的计数/状态小字（不抢标题，但一眼能看到量）。 */
+    .group-hint {
+      margin-left: 8px;
+      font-weight: 400;
+      font-size: 12px;
+      color: var(--muted)
+    }
+
+    /* 音色库表单：两列对齐（名称窄、逐字稿宽），窄屏自动堆成一列。 */
+    .tts-voice-form {
+      display: grid;
+      grid-template-columns: 140px 1fr;
+      gap: 8px 10px;
+      align-items: center
+    }
+
+    @media (max-width: 720px) {
+      .tts-voice-form {
+        grid-template-columns: 1fr
+      }
+    }
+
     button:hover {
       background: var(--surface-hover);
       border-color: var(--accent-border-soft-hover)
@@ -2334,6 +2387,8 @@
           class="nav-count" id="pendingCount">—</span></button>
       <button data-view="persona" class="nav-item"><span class="nav-icon" aria-hidden="true">◉</span>人格与角色</button>
       <div class="nav-label">聊天行为</div>
+      <button data-view="voice" class="nav-item"><span class="nav-icon" aria-hidden="true">♫</span>语音系统<span
+          class="nav-note">TTS</span></button>
       <button data-view="social-v3" class="nav-item"><span class="nav-icon" aria-hidden="true">◍</span>三代仿真<span
           class="nav-note">V3</span></button>
       <button data-view="social-v2" class="nav-item"><span class="nav-icon" aria-hidden="true">◈</span>二代仿真<span
@@ -2732,33 +2787,7 @@
 
             </div>
           </details>
-          <details class="settings-group">
-            <summary>语音库与语音发送（调试）</summary>
-            <div class="settings-content">
-              <div class="meta" style="margin-bottom:8px">
-                语音库目录：<code>qq-bridge/audio/</code>（改 <code>socialV2.voice.dir</code> 可换）。把音频文件丢进去即可被 AI 用
-                <code>qq_send_voice</code> 发出；
-                本面板用于调试与试发 —— 试发走的是与 AI 通道相同的解析/校验/限流路径（<code>/api/voice/send</code>），只是由你在控制台触发。
-              </div>
-              <div class="row" style="flex-wrap:wrap;gap:8px;align-items:center">
-                <button id="voiceRefreshBtn" type="button" class="btn-secondary">刷新语音库</button>
-                <label style="flex:0 0 auto">发送目标</label>
-                <input type="text" id="voiceSendTarget" placeholder="group:100005" style="width:190px">
-                <label style="flex:0 0 auto"><input type="checkbox" id="voiceSendDryRun" style="width:auto">
-                  只校验不发送</label>
-                <button id="voiceSendBtn" type="button">试发选中语音</button>
-                <span id="voiceMsg" class="meta"></span>
-              </div>
-              <div id="voiceList" class="meta" style="margin-top:8px">点「刷新语音库」加载…</div>
-              <div class="meta" style="margin-top:6px">
-                上限：时长 <code>maxSeconds</code>、体积 <code>maxBytes</code>、频率
-                <code>maxPerMinute</code>/<code>maxPerHour</code>（见下方配置区）。
-                命令行等价工具：<code>node scripts/send-voice.mjs list-voice</code>（经桥接）或
-                <code>node voice-cli.mjs</code>（独立工具，在上级 <code>voice-tool/</code> 里直连 SnowLuma）。
-              </div>
-
-            </div>
-          </details>
+          <div class="meta">语音库、试发与 TTS 接入状态已集中到 <button class="text-button" data-view="voice">语音系统 →</button></div>
           <details class="settings-group">
             <summary>唤醒推荐值（仅参考，AI 可不遵守）</summary>
             <div class="settings-content">
@@ -3084,6 +3113,117 @@
             <div class="meta" style="margin-top:4px">修改上面任意推荐/默认参数后，必须点这个按钮才会持久化；保存后会自动应用到仍使用默认唤醒配置的会话，重启后仍然保留。</div>
 
           </div>
+        </section>
+        <section id="section-voice" data-page="voice" class="card span-all">
+          <h2>语音系统</h2>
+          <div class="meta">把语音库里的音频当语音条发出；也可以让 Breeze TTS 2 在本机合成一条（全本地推理，文本不出网）。</div>
+          <div class="row" style="margin-top:12px;flex-wrap:wrap;gap:10px">
+            <div class="metric"><span>语音库文件</span><strong id="voiceFileCount">—</strong></div>
+            <div class="metric"><span>本地合成（TTS）</span><strong id="ttsStateLabel">—</strong></div>
+            <div class="metric"><span>TTS 引擎</span><strong id="ttsHealthLabel" style="font-size:13px">—</strong></div>
+            <div class="metric"><span>今日语音条数</span><strong id="ttsTodayLabel">—</strong></div>
+          </div>
+
+          <details class="settings-group" style="margin-top:14px" open>
+            <summary>语音库与试发<span id="voiceGroupHint" class="group-hint"></span></summary>
+            <div class="settings-content">
+              <div class="row" style="flex-wrap:wrap;gap:8px;align-items:center">
+                <button id="voiceRefreshBtn" type="button" class="btn-secondary">刷新语音库</button>
+                <label style="flex:0 0 auto">发送目标</label>
+                <input type="text" id="voiceSendTarget" placeholder="group:100005" style="width:190px">
+                <button id="voiceSendBtn" type="button">试发选中语音</button>
+                <span id="voiceMsg" class="meta"></span>
+              </div>
+              <div id="voiceList" class="meta" style="margin-top:8px">点「刷新语音库」加载…</div>
+            </div>
+          </details>
+
+          <details class="settings-group">
+            <summary>本地合成（TTS）<span id="ttsGroupHint" class="group-hint"></span></summary>
+            <div class="settings-content">
+              <div class="row" style="flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:2px">
+                <label style="flex:0 0 auto">音色
+                  <select id="ttsVoice" style="width:170px"><option value="">文字描述（默认）</option></select>
+                </label>
+                <span id="ttsVoiceHint" class="meta"></span>
+                <label style="flex:0 0 auto!important;min-width:max-content;margin-left:auto;display:flex;align-items:center;gap:6px;white-space:nowrap">贴合度 cfgScale
+                  <input type="range" id="ttsCfgScale" min="0" max="10" step="0.1" value="5" style="width:150px;vertical-align:middle">
+                  <b id="ttsCfgScaleValue" style="font-family:ui-monospace,Consolas,monospace;min-width:22px;display:inline-block">5</b>
+                </label>
+                <span id="ttsCfgScaleMsg" class="meta"></span>
+              </div>
+              <div class="meta" id="ttsCfgScaleHint" style="margin:0 0 8px">
+                贴合度（cfgScale）越大，合成出来的声音越贴「音色」里选的这个人；太大（6 以上）会变生硬、像念稿，太小（3 以下）会跑回模型默认的口气，推荐 4.5~5.5。
+                拖动后松手自动保存，<b>下一次合成生效</b>，已经生成过的旧音频不会被改写。
+              </div>
+              <div class="row" style="flex-wrap:wrap;gap:8px;align-items:flex-end;margin-bottom:6px">
+                <label style="flex:0 0 auto">私聊默认音色
+                  <select id="ttsVoicePrivate" style="width:150px"></select>
+                </label>
+                <label style="flex:0 0 auto">群聊默认音色
+                  <select id="ttsVoiceGroup" style="width:150px"></select>
+                </label>
+                <button id="ttsVoiceDefaultSave" type="button" style="height:39px;padding:0 15px;display:inline-flex;align-items:center;box-sizing:border-box;margin-bottom:6px">保存默认音色</button>
+                <span id="ttsVoiceDefaultMsg" class="meta"></span>
+              </div>
+              <label style="display:block">要念的话
+                <textarea id="ttsText" rows="2" placeholder="1~2 句口语，可用 [笑] [叹气] 这类发音标记"></textarea>
+              </label>
+              <div class="row" id="ttsDesignRow" style="margin-top:6px">
+                <label style="flex:1 1 100%">音色描述（文字描述模式生效）
+                  <input type="text" id="ttsVoiceDesign" placeholder="温柔自信的年轻女性，语气亲切">
+                </label>
+              </div>
+              <div class="row" style="flex-wrap:wrap;gap:8px;align-items:center;margin-top:6px">
+                <label style="flex:0 0 auto">语速
+                  <input type="number" id="ttsSpeed" min="0.5" max="2" step="0.05" value="1" style="width:80px">
+                </label>
+                <label style="flex:0 0 auto">发送目标
+                  <input type="text" id="ttsTarget" placeholder="留空=只试听" style="width:180px">
+                </label>
+              </div>
+              <div class="row" style="margin-top:8px;flex-wrap:wrap;gap:8px;align-items:center">
+                <button id="ttsPreviewBtn" type="button" class="btn-secondary">试听（只合成）</button>
+                <button id="ttsSayBtn" type="button">合成并发送</button>
+                <span id="ttsMsg" class="meta"></span>
+              </div>
+              <div id="ttsResult" class="meta" style="margin-top:8px"></div>
+              <div class="meta" style="margin-top:6px">CPU 合成一句话要十几秒，点一次等结果，别连点；同一句重复合成会直接复用已有文件。</div>
+            </div>
+          </details>
+
+          <details class="settings-group">
+            <summary>音色库（克隆音色）<span id="ttsVoiceGroupHint" class="group-hint"></span></summary>
+            <div class="settings-content">
+              <div class="meta" style="margin-bottom:10px">
+                上传一段 3~20 秒的干净人声，再填上它<b>逐字稿</b>（音频里说的话一字不差），起个名字就能在上面「音色」里选。
+                参考音频只存在 <code>state/tts-refs</code>，不会进语音库。只允许本人授权音色或虚拟音色。
+              </div>
+              <div class="tts-voice-form">
+                <label>名称
+                  <input type="text" id="ttsVoiceName" placeholder="如：小暖">
+                </label>
+                <label>逐字稿
+                  <input type="text" id="ttsVoiceRefText" placeholder="和音频里说的话一字不差">
+                </label>
+              </div>
+              <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:10px;align-items:center">
+                <input type="file" id="ttsVoiceFile" accept="audio/*,video/mp4">
+                <button id="ttsVoiceUploadBtn" type="button">保存音色</button>
+                <span id="ttsVoiceMsg" class="meta"></span>
+              </div>
+              <div id="ttsVoiceList" class="meta" style="margin-top:10px">（还没有克隆音色）</div>
+            </div>
+          </details>
+
+          <details class="settings-group">
+            <summary>限额与说明</summary>
+            <div class="settings-content">
+              <div class="meta">语音条有独立的时长、体积、每分钟条数上限，和文字额度分开算；合成的每句话另有字数上限（默认 120 字）和每日条数上限。</div>
+              <div class="meta" style="margin-top:6px">想让机器人在聊天里自己发语音，要去「三代仿真 → 基础」把语音总开关和发送工具开关打开 —— 这两个现在是关着的，所以卡片显示「已配置·未放行」。</div>
+              <div class="meta" style="margin-top:6px">参考音频只能放在 WSL 的 <code>~/tts/refs/</code>，不要放进语音库；只允许本人授权音色或虚拟音色。</div>
+            </div>
+          </details>
         </section>
         <section id="section-social-v3" data-page="social-v3" class="card span-all">
           <h2>三代仿真（GEN3）灰度与回滚</h2>
@@ -4192,21 +4332,27 @@
         const r = await api('/api/voice/list?probe=1');
         voiceEntries = Array.isArray(r.voices) ? r.voices : [];
         voiceLibraryLoaded = true;
+        const countLabel = document.getElementById('voiceFileCount');
+        if (countLabel) countLabel.textContent = String(voiceEntries.length);
+        const hint = document.getElementById('voiceGroupHint');
+        if (hint) hint.textContent = voiceEntries.length + ' 个文件';
         if (!voiceEntries.length) {
           box.innerHTML = '语音库是空的：把音频文件放进 <code>qq-bridge/audio/</code> 后点「刷新语音库」。';
           return;
         }
-        const limits = r.limits || {};
-        box.innerHTML = '共 ' + voiceEntries.length + ' 个（上限：' + (limits.maxSeconds || '?') + ' 秒 / '
-          + Math.round((limits.maxBytes || 0) / 1024 / 1024) + ' MiB / ' + (limits.maxPerMinute || '?') + ' 每分钟）：<br>'
+        box.innerHTML = '共 ' + voiceEntries.length + ' 个（<span class="tag">合成</span> 是本机 TTS 产物，其余是语音库里的音频）：<br>'
           + voiceEntries.map((v, i) => {
             const bad = v.ok === false;
             // v.name / v.error / v.detail 来自语音库的文件名与探测结果，属于**外部数据**：
             // 语音库目录里放一个名为 `x<img src=x onerror=...>.mp3` 的文件即可注入脚本
             // （CSP 允许 unsafe-inline，拦不住内联事件处理器）。所有插值都必须过 esc()。
+            // 来源标记：audio/tts/ 下的是本机合成产物，其余是用户自己放进语音库的真实音频。
+            // 分开显示是为了避免"手滑把合成产物当成真人录音发出去"。
+            const isTts = /^tts\//.test(String(v.name || ''));
+            const badge = isTts ? '<span class="tag" style="margin-left:4px">合成</span>' : '';
             return '<label style="display:block;margin:2px 0">'
               + '<input type="radio" name="voicePick" value="' + i + '"' + (i === 0 ? ' checked' : '') + '> '
-              + '<code>' + esc(v.name) + '</code> ' + (bad ? '❌ ' + esc(v.error || '不可用') : esc(v.detail || ''))
+              + '<code>' + esc(v.name) + '</code>' + badge + ' ' + (bad ? '❌ ' + esc(v.error || '不可用') : esc(v.detail || ''))
               + '</label>';
           }).join('');
       } catch (error) {
@@ -4218,14 +4364,13 @@
     async function sendVoiceFromConsole() {
       const msg = document.getElementById('voiceMsg');
       const target = document.getElementById('voiceSendTarget').value.trim();
-      const dryRun = document.getElementById('voiceSendDryRun').checked;
       const pick = document.querySelector('input[name="voicePick"]:checked');
       if (!target) { msg.textContent = '❌ 请填发送目标（如 group:100005）'; msg.className = 'meta err'; return; }
       if (!pick) { msg.textContent = '❌ 先刷新语音库并选中一个音频'; msg.className = 'meta err'; return; }
       const entry = voiceEntries[Number(pick.value)];
       msg.textContent = '发送中…'; msg.className = 'meta';
       try {
-        const r = await api('/api/voice/send', 'POST', { target, file: entry.name, dryRun });
+        const r = await api('/api/voice/send', 'POST', { target, file: entry.name, dryRun: false });
         if (r.dryRun) {
           msg.textContent = '✅ 校验通过（未发送）：' + (r.detail || '');
           msg.className = 'meta ok';
@@ -4244,7 +4389,266 @@
       }
     }
 
-    // ── 二代仿真模式（reserved2）配置 ─────────────────────────────────────────
+    // ── 本地语音合成（TTS）面板 ─────────────────────────────────────────────
+    // 只调桥接：/api/voice/tts/status（状态 + /health 探活）与 /api/voice/tts（合成，可 dryRun）。
+    // 前端**不直连** sidecar，也不知道 WSL 的存在 —— 换个引擎只改桥接配置。
+    async function loadTtsStatus() {
+      const stateEl = document.getElementById('ttsStateLabel');
+      const healthEl = document.getElementById('ttsHealthLabel');
+      const todayEl = document.getElementById('ttsTodayLabel');
+      try {
+        const r = await api('/api/voice/tts/status');
+        if (stateEl) {
+          stateEl.textContent = r.enabled ? (r.available ? '已启用' : '已配置·未放行') : '未启用';
+          stateEl.className = r.enabled && r.available ? 'ok' : '';
+        }
+        if (healthEl) {
+          const h = r.health || {};
+          // 卡片上只写「在线/离线」，把完整错误塞进 title（悬停可见）：长错误直接铺在卡里会把版面撑乱。
+          healthEl.textContent = !r.enabled ? '—（未启用）' : (h.ready ? '在线' : '离线');
+          healthEl.title = h.ready ? '' : (h.error || String(h.engineStatus || '不可达'));
+          healthEl.className = h.ready ? 'ok' : 'err';
+        }
+        const groupHint = document.getElementById('ttsGroupHint');
+        if (groupHint) {
+          groupHint.textContent = !r.enabled ? '未启用' : (r.health?.ready ? '引擎在线' : '引擎离线');
+        }
+        ttsDefaultVoice = String(r.defaultVoice || '');
+        ttsDefaultPrivate = String(r.defaultVoicePrivate || '');
+        ttsDefaultGroup = String(r.defaultVoiceGroup || '');
+        if (typeof renderTtsVoiceOptions === 'function') renderTtsVoiceOptions();
+        // 贴合度滑块：用户自己拖过（touched=1）就不再被状态刷新覆盖。
+        const cfgScaleEl = document.getElementById('ttsCfgScale');
+        if (cfgScaleEl && cfgScaleEl.dataset.touched !== '1' && Number.isFinite(Number(r.cfgScale))) {
+          cfgScaleEl.value = String(r.cfgScale);
+          document.getElementById('ttsCfgScaleValue').textContent = String(Number(r.cfgScale));
+        }
+        if (todayEl) todayEl.textContent = String(r.todayCount ?? 0) + (r.dailyLimit ? ' / ' + r.dailyLimit : ' / 不限');
+        // 默认值回填（只在用户没手动改过时，避免覆盖正在编辑的内容）
+        const design = document.getElementById('ttsVoiceDesign');
+        if (design && !design.value && r.voiceDesign) design.placeholder = r.voiceDesign;
+        if (r.warnings && r.warnings.length) {
+          const box = document.getElementById('ttsResult');
+          if (box) box.innerHTML = '<b>配置告警：</b>' + r.warnings.map(esc).join('；');
+        }
+      } catch (error) {
+        if (stateEl) { stateEl.textContent = '状态读取失败'; stateEl.className = 'err'; }
+      }
+    }
+
+    async function ttsRun(send) {
+      const msg = document.getElementById('ttsMsg');
+      const box = document.getElementById('ttsResult');
+      const text = document.getElementById('ttsText').value.trim();
+      const target = document.getElementById('ttsTarget').value.trim();
+      const voiceName = document.getElementById('ttsVoice').value;
+      // 选了克隆音色就只传名字：参考音频路径与逐字稿由桥接从登记表取，前端不碰路径。
+      const body = voiceName
+        ? { text, voiceName, speed: Number(document.getElementById('ttsSpeed').value) || 1 }
+        : {
+          text,
+          mode: 'design',
+          voiceDesign: document.getElementById('ttsVoiceDesign').value.trim(),
+          speed: Number(document.getElementById('ttsSpeed').value) || 1
+        };
+      if (!text) { msg.textContent = '❌ 先写要念的话'; msg.className = 'meta err'; return; }
+      if (send && !target) { msg.textContent = '❌ 发送要填目标（如 group:100005）'; msg.className = 'meta err'; return; }
+      body.target = target || '';
+      body.dryRun = !send;
+      msg.textContent = send ? '合成并发送中（可能要十几秒）…' : '合成中（可能要十几秒）…';
+      msg.className = 'meta';
+      box.textContent = '';
+      try {
+        const r = await api('/api/voice/tts', 'POST', body);
+        msg.textContent = send
+          ? '✅ 已发出 messageId=' + (r.messageId ?? '?') + (r.verified ? '，已回读为语音段' : '，未回读校验')
+          : '✅ 已合成（未发送）';
+        msg.className = 'meta ok';
+        // file / text 都是服务端返回的数据：一律 esc() 后再拼 HTML（语音库文件名可注入）。
+        box.innerHTML = '<div>朗读文本：<code>' + esc(r.text || '') + '</code></div>'
+          + '<div>产物：<code>' + esc(r.relPath || r.file || '') + '</code>（' + Math.round((r.bytes || 0) / 1024) + ' KB，'
+          + (r.durationSec != null ? r.durationSec + ' 秒' : '时长未知') + '，耗时 ' + (r.elapsedMs ?? '?') + ' ms'
+          + (r.cached ? '，命中已有产物' : '') + '）</div>'
+          + (r.voice ? '<div>音色：<code>' + esc(r.voice) + '</code>（克隆）</div>' : '');
+        loadVoiceLibrary(true); // 新生成的产物会出现在语音库列表里（来源：audio/tts/）
+        loadTtsStatus();
+      } catch (error) {
+        msg.textContent = '❌ ' + (error && error.message ? error.message : error);
+        msg.className = 'meta err';
+      }
+    }
+
+    // ── 音色库（克隆音色） ───────────────────────────────────────────────────
+    // 名字是唯一标识；参考音频存在 state/tts-refs/（WSL 内由 sidecar 转码），不进语音库。
+    let ttsVoiceEntries = [];
+    // config.json 的 tts.voice：默认音色，进页面时预选它（用户手动选过就不再覆盖）。
+    let ttsDefaultVoice = '';
+    // 私聊 / 群聊各自的默认音色（tts.voicePrivate / tts.voiceGroup）。
+    let ttsDefaultPrivate = '';
+    let ttsDefaultGroup = '';
+
+    function applyDefaultVoiceSelection() {
+      const sel = document.getElementById('ttsVoice');
+      if (!sel || !ttsDefaultVoice || sel.dataset.userPicked === '1' || sel.value) return;
+      if (!Array.from(sel.options).some(o => o.value === ttsDefaultVoice)) return;
+      sel.value = ttsDefaultVoice;
+      updateTtsVoiceHint();
+    }
+
+    /** 重建音色下拉。状态与音色库是并行加载的：谁后到都调它一次，保证「默认音色」标记不丢。 */
+    function renderTtsVoiceOptions() {
+      const sel = document.getElementById('ttsVoice');
+      if (!sel) return;
+      const keep = sel.value;
+      sel.innerHTML = '<option value="">文字描述（默认）</option>'
+        + ttsVoiceEntries.map(v => '<option value="' + esc(v.name) + '">' + esc(v.name)
+          + (v.name === ttsDefaultVoice ? '（默认音色）' : '')
+          + (v.exists ? '' : '（音频丢失）') + '</option>').join('');
+      sel.value = ttsVoiceEntries.some(v => v.name === keep && v.exists) ? keep : '';
+      updateTtsVoiceHint();
+      applyDefaultVoiceSelection();
+      // 私聊 / 群聊默认音色的下拉也用同一份音色库
+      for (const [id, current] of [['ttsVoicePrivate', ttsDefaultPrivate], ['ttsVoiceGroup', ttsDefaultGroup]]) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        const keepDefault = el.dataset.touched === '1' ? el.value : current;
+        el.innerHTML = '<option value="">跟随通用默认</option>'
+          + ttsVoiceEntries.map(v => '<option value="' + esc(v.name) + '">' + esc(v.name)
+            + (v.exists ? '' : '（音频丢失）') + '</option>').join('');
+        el.value = ttsVoiceEntries.some(v => v.name === keepDefault) ? keepDefault : '';
+      }
+    }
+
+    function updateTtsVoiceHint() {
+      const sel = document.getElementById('ttsVoice');
+      const hint = document.getElementById('ttsVoiceHint');
+      const designRow = document.getElementById('ttsDesignRow');
+      if (!sel) return;
+      const isClone = Boolean(sel.value);
+      if (designRow) designRow.hidden = isClone;
+      if (hint) hint.textContent = isClone ? '使用克隆音色（音色描述不生效）' : '用文字描述生成音色';
+    }
+
+    async function loadTtsVoices() {
+      const sel = document.getElementById('ttsVoice');
+      const listBox = document.getElementById('ttsVoiceList');
+      try {
+        const r = await api('/api/voice/tts/voices');
+        ttsVoiceEntries = Array.isArray(r.voices) ? r.voices : [];
+        renderTtsVoiceOptions();
+        listBox.innerHTML = ttsVoiceEntries.length
+          ? '共 ' + ttsVoiceEntries.length + ' 个：' + ttsVoiceEntries.map(v =>
+            '<span style="margin-right:12px">' + esc(v.name) + '（' + (v.durationSec ?? '?') + ' 秒）'
+            + '<button class="small danger" type="button" data-tts-voice-del="' + esc(v.name) + '" style="margin-left:4px">删除</button></span>').join('')
+          : '（还没有克隆音色）';
+        const hint = document.getElementById('ttsVoiceGroupHint');
+        if (hint) hint.textContent = ttsVoiceEntries.length ? ttsVoiceEntries.length + ' 个音色' : '空';
+      } catch (error) {
+        if (listBox) listBox.textContent = '音色库读取失败：' + (error && error.message ? error.message : error);
+      }
+    }
+
+    /** 文件 → base64（不经后端解码，后端只收字符串）。 */
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const s = String(reader.result || '');
+          resolve(s.slice(s.indexOf(',') + 1));
+        };
+        reader.onerror = () => reject(new Error('读取文件失败'));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function uploadTtsVoice() {
+      const msg = document.getElementById('ttsVoiceMsg');
+      const name = document.getElementById('ttsVoiceName').value.trim();
+      const refText = document.getElementById('ttsVoiceRefText').value.trim();
+      const picker = document.getElementById('ttsVoiceFile');
+      const file = picker.files && picker.files[0];
+      if (!name) { msg.textContent = '❌ 先给音色起个名字'; msg.className = 'meta err'; return; }
+      if (!refText) { msg.textContent = '❌ 逐字稿要和音频里说的话一字不差'; msg.className = 'meta err'; return; }
+      if (!file) { msg.textContent = '❌ 先选一段参考音频'; msg.className = 'meta err'; return; }
+      if (file.size > 6 * 1024 * 1024) { msg.textContent = '❌ 音频太大（限 6MB，3~20 秒足够）'; msg.className = 'meta err'; return; }
+      msg.textContent = '上传并转码中…'; msg.className = 'meta';
+      try {
+        const audio = await fileToBase64(file);
+        const r = await api('/api/voice/tts/voices', 'POST', { name, refText, audio });
+        msg.textContent = '✅ 已保存音色「' + (r.voice?.name ?? name) + '」（' + (r.voice?.durationSec ?? '?') + ' 秒）';
+        msg.className = 'meta ok';
+        picker.value = '';
+        document.getElementById('ttsVoiceName').value = '';
+        await loadTtsVoices();
+        const sel = document.getElementById('ttsVoice');
+        if (sel && r.voice?.name) { sel.value = r.voice.name; updateTtsVoiceHint(); }
+      } catch (error) {
+        msg.textContent = '❌ ' + (error && error.message ? error.message : error);
+        msg.className = 'meta err';
+      }
+    }
+
+    /** 保存「私聊 / 群聊」默认音色到 config.json（空值 = 跟随通用默认 tts.voice）。 */
+    async function saveDefaultVoices() {
+      const msg = document.getElementById('ttsVoiceDefaultMsg');
+      const voicePrivate = document.getElementById('ttsVoicePrivate').value;
+      const voiceGroup = document.getElementById('ttsVoiceGroup').value;
+      msg.textContent = '保存中…';
+      msg.className = 'meta';
+      try {
+        const r = await api('/api/voice/tts/default-voice', 'POST', { voicePrivate, voiceGroup });
+        ttsDefaultPrivate = String(r.voicePrivate || '');
+        ttsDefaultGroup = String(r.voiceGroup || '');
+        document.getElementById('ttsVoicePrivate').dataset.touched = '0';
+        document.getElementById('ttsVoiceGroup').dataset.touched = '0';
+        renderTtsVoiceOptions();
+        msg.textContent = '✅ 已保存：私聊 ' + (r.voicePrivate || '跟随通用默认')
+          + ' / 群聊 ' + (r.voiceGroup || '跟随通用默认');
+        msg.className = 'meta ok';
+      } catch (error) {
+        msg.textContent = '❌ ' + (error && error.message ? error.message : error);
+        msg.className = 'meta err';
+      }
+    }
+
+    /**
+     * 保存「音色贴合度」cfgScale 到 config.json。
+     * 桥接每次合成前重读配置，所以保存完下一次合成就是新值，不需要重启。
+     */
+    let ttsCfgScaleTimer = null;
+    async function saveTtsCfgScale(value) {
+      const el = document.getElementById('ttsCfgScale');
+      const msg = document.getElementById('ttsCfgScaleMsg');
+      msg.textContent = '保存中…';
+      msg.className = 'meta';
+      try {
+        const r = await api('/api/voice/tts/settings', 'POST', { cfgScale: value });
+        el.value = String(r.cfgScale);
+        el.dataset.touched = '0';
+        document.getElementById('ttsCfgScaleValue').textContent = String(Number(r.cfgScale));
+        msg.textContent = '✅ 已保存 ' + r.cfgScale + '，下次合成生效';
+        msg.className = 'meta ok';
+      } catch (error) {
+        msg.textContent = '❌ ' + (error && error.message ? error.message : error);
+        msg.className = 'meta err';
+      }
+    }
+
+    async function removeTtsVoice(name) {
+      const msg = document.getElementById('ttsVoiceMsg');
+      if (!confirm('删除音色「' + name + '」？参考音频也会一起删掉。')) return;
+      try {
+        await api('/api/voice/tts/voices?name=' + encodeURIComponent(name), 'DELETE', {});
+        msg.textContent = '已删除「' + name + '」';
+        msg.className = 'meta ok';
+        await loadTtsVoices();
+      } catch (error) {
+        msg.textContent = '❌ ' + (error && error.message ? error.message : error);
+        msg.className = 'meta err';
+      }
+    }
+
+
     async function loadV2Config() {
       try {
         const r = await api('/api/socialV2/config');
@@ -4516,9 +4920,52 @@
         const content = document.createElement('div');
         content.className = 'settings-content';
         for (const field of groupFields) content.appendChild(renderSocialV3Field(field, readSocialV3Value(config, field.path)));
+        // 语音系统开关跟着「基础」走：现网跑三代，语音是聊天能力的一部分，
+        // 但数据仍存在 socialV2（统一语音发送闸门），这里复用同一个 v2 配置端点热生效。
+        if (groupName === '基础') content.appendChild(buildV3VoiceBlock());
         details.appendChild(content);
         box.appendChild(details);
       }
+    }
+
+    /** 三代「基础」分组尾部的语音开关：只提交两个布尔值，后端做深合并，不会冲掉语音库其它配置。 */
+    function buildV3VoiceBlock() {
+      const wrap = document.createElement('div');
+      wrap.style.marginTop = '12px';
+      wrap.innerHTML = '<div class="meta"><b>语音系统</b>：允许机器人发语音条（合成与试听在「语音系统」页）</div>'
+        + '<div class="v2-tool-list" style="margin-top:6px">'
+        + '<label class="v2-tool-item"><input type="checkbox" id="v3VoiceEnabled"> <span>允许发语音（总开关）</span></label>'
+        + '<label class="v2-tool-item"><input type="checkbox" id="v3VoiceTool"> <span>给 AI 注册 <code>qq_send_voice</code> / <code>qq_tts_say</code></span></label>'
+        + '</div>'
+        + '<div class="row" style="margin-top:8px">'
+        + '<button id="v3VoiceJump" type="button" class="small btn-secondary">去语音系统页合成 / 试发</button>'
+        + '<span id="v3VoiceMsg" class="meta"></span>'
+        + '</div>';
+      const on = wrap.querySelector('#v3VoiceEnabled');
+      const tool = wrap.querySelector('#v3VoiceTool');
+      const msg = wrap.querySelector('#v3VoiceMsg');
+      api('/api/socialV2/config').then((r) => {
+        const c = (r && r.config) || {};
+        on.checked = (c.voice && c.voice.enabled) !== false;
+        tool.checked = (c.tools && c.tools.sendVoice) !== false;
+      }).catch(() => {});
+      const save = async () => {
+        msg.textContent = '保存中…';
+        msg.className = 'meta';
+        try {
+          await api('/api/socialV2/config', 'POST', { voice: { enabled: on.checked }, tools: { sendVoice: tool.checked } });
+          msg.textContent = '已保存并生效';
+          msg.className = 'meta ok';
+          if (typeof loadTtsStatus === 'function') loadTtsStatus();
+        } catch (error) {
+          msg.textContent = '保存失败：' + (error && error.message ? error.message : error);
+          msg.className = 'meta err';
+        }
+      };
+      on.addEventListener('change', save);
+      tool.addEventListener('change', save);
+      wrap.querySelector('#v3VoiceJump').addEventListener('click', () => setConsolePage('voice'));
+      return wrap;
     }
 
     function renderSocialV3Status(status) {
@@ -5138,6 +5585,31 @@
     document.getElementById('v2ConfigSaveTop').addEventListener('click', saveV2Config);
     document.getElementById('voiceRefreshBtn').addEventListener('click', () => loadVoiceLibrary(true));
     document.getElementById('voiceSendBtn').addEventListener('click', sendVoiceFromConsole);
+    document.getElementById('ttsPreviewBtn').addEventListener('click', () => ttsRun(false));
+    document.getElementById('ttsSayBtn').addEventListener('click', () => ttsRun(true));
+    document.getElementById('ttsVoice').addEventListener('change', (ev) => {
+      // 用户手动选过音色后，后续刷新状态不再把默认音色盖回来。
+      ev.target.dataset.userPicked = '1';
+      updateTtsVoiceHint();
+    });
+    document.getElementById('ttsVoiceUploadBtn').addEventListener('click', uploadTtsVoice);
+    document.getElementById('ttsVoiceDefaultSave').addEventListener('click', saveDefaultVoices);
+    // 贴合度滑块：拖动时只更新数字，松手（change）后延迟合并成一次保存，避免连拖写很多次配置文件。
+    document.getElementById('ttsCfgScale').addEventListener('input', (ev) => {
+      ev.target.dataset.touched = '1';
+      document.getElementById('ttsCfgScaleValue').textContent = String(Number(ev.target.value));
+    });
+    document.getElementById('ttsCfgScale').addEventListener('change', (ev) => {
+      clearTimeout(ttsCfgScaleTimer);
+      ttsCfgScaleTimer = setTimeout(() => saveTtsCfgScale(Number(ev.target.value)), 250);
+    });
+    for (const id of ['ttsVoicePrivate', 'ttsVoiceGroup']) {
+      document.getElementById(id).addEventListener('change', (ev) => { ev.target.dataset.touched = '1'; });
+    }
+    document.getElementById('ttsVoiceList').addEventListener('click', (ev) => {
+      const btn = ev.target.closest('[data-tts-voice-del]');
+      if (btn) removeTtsVoice(btn.dataset.ttsVoiceDel);
+    });
     async function refreshV2Activity() {
       try {
         const r = await api('/api/socialV2/activity');
@@ -5723,6 +6195,7 @@
       overview: ['运行总览', '让每一次连接，都自然发生。', '掌握桥接状态，轻松管理你的 QQ 智能伙伴。'],
       sessions: ['会话与审批', '让每一段对话，都有迹可循。', '查看 QQ 与 DSH 的会话映射，以及等待你回复的审批和提问。'],
       persona: ['人格与角色', '给你的伙伴，一点独特个性。', '选择已有角色，或用自己的语言写下新的性格与表达方式。'],
+      'voice': ['语音系统', '让每一句话，都有声音。', '管理语音库与试发，并用本地 TTS（Breeze TTS 2）现合成语音条。'],
       'social-v2': ['二代仿真', '自主参与，恰到好处。', '管理 AI 的工具、唤醒与发言节奏。展开需要调整的分组，修改后保存参数。'],
       'social-v3': ['三代仿真', '灰度可控，随时回退。', '按群开关三代模块，任何阶段一键回 V2 且参数保留；保存后热生效，无需重启。'],
       'social-v1': ['一代仿真', '为自然对话，设定合适的节奏。', '调整参与概率、活跃周期和分条发送；所有配置项完整保留。'],
@@ -5786,8 +6259,10 @@
       document.title = consolePages[page][0] + ' · QQ 桥接控制台';
       if (updateHash && location.hash !== '#' + page) history.pushState({}, '', '#' + page);
       closeConsoleSearch();
-      // 语音库按需加载：进入二代仿真页时才探测（避免每次开控制台都压网关）。
-      if (page === 'social-v2' && typeof loadVoiceLibrary === 'function') loadVoiceLibrary();
+      // 语音库按需加载：进入「语音系统」页时才探测（避免每次开控制台都压网关）。
+      if (page === 'voice' && typeof loadVoiceLibrary === 'function') loadVoiceLibrary();
+      if (page === 'voice' && typeof loadTtsStatus === 'function') loadTtsStatus();
+      if (page === 'voice' && typeof loadTtsVoices === 'function') loadTtsVoices();
       // 三代仿真面板按需加载：只有进入该页才拉取字段与状态，避免每次开控制台都打一份配置。
       if (page === 'social-v3' && typeof loadSocialV3Config === 'function') loadSocialV3Config();
       if (focus) {

@@ -1214,6 +1214,50 @@ if (cfg.socialV2?.voice?.enabled !== false && cfg.socialV2?.tools?.sendVoice !==
   );
 }
 
+// ── 本地语音合成（Breeze TTS 2）────────────────────────────────────────────
+//
+// 三个闸门同时满足才注册（见 docs/design/VOICE_TTS_INTEGRATION_PLAN.md §8.1）：
+//   cfg.tts.enabled === true && socialV2.voice.enabled !== false && tools.sendVoice !== false
+// 默认关闭 → 老部署的工具面完全不变（不多一个工具、不多一份 token 开销）。
+if (cfg.tts?.enabled === true && cfg.socialV2?.voice?.enabled !== false && cfg.socialV2?.tools?.sendVoice !== false) {
+  server.tool(
+    'qq_tts_say',
+    '把一段文字**合成语音**并发到会话里（本地合成，文本不出本机；默认没开，开了才能用）。和 qq_send_voice 的区别：qq_send_voice 只发语音库里已有的文件，这个是把你想说的话现念出来。什么时候用：对方明确说想听你的声音、或这一轮情绪很强（道晚安/撒娇/认真安慰/真的生气）时；一次唤醒最多 1 条，不要连着发两条；内容控制在 1~2 句、别把长段落念出来；不要和刚发的文字重复同一个意思（语音是「额外一句」，不是复读）；失败了就直接改用文字回复，不要说「我发不出来」、也不要重试。合成要几秒到几十秒，别在等它的时候又发文字。',
+    {
+      key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+      token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+      text: z.string().describe('要念出来的话（1~2 句，建议 ≤ 60 字；可用 [笑]/[叹气] 这类发音标记）'),
+      label: z.string().optional().describe('可选：写进会话记录里的说明，如「说了句晚安」'),
+      voiceDesign: z.string().optional().describe('可选：临时改音色描述（一般不用传，用配置里的默认音色）'),
+      speed: z.number().optional().describe('可选：语速 0.5~2，默认 1'),
+      verify: z.boolean().optional().describe('是否回读校验语音已落地（默认 true）')
+    },
+    async ({ key, token, text, label, voiceDesign, speed, verify }) => {
+      try {
+        const data = await agentApi('/api/socialV2/tts-say', {
+          method: 'POST',
+          body: JSON.stringify({
+            key,
+            text: String(text),
+            label: label || '',
+            voiceDesign: voiceDesign || '',
+            speed: speed ?? null,
+            verify: verify !== false,
+            token
+          }),
+          headers: { 'x-agent-token': token },
+          // 合成是 CPU 推理：短句热态约 10~20s，长句更久；给 5 分钟，避免"能合成却被 MCP 超时砍断"。
+          timeoutMs: 300000
+        });
+        return { content: [{ type: 'text', text: serializeModelData(data) }] };
+      } catch (error) {
+        // 失败不重试：MCP 侧原样回给模型，由它按 fallbackToText 改打字。
+        return { content: [{ type: 'text', text: `合成语音失败：${error?.message ?? error}（本次没有发出语音，请直接用文字回复）` }], isError: true };
+      }
+    }
+  );
+}
+
 if (cfg.socialV2?.tools?.getSelfImage !== false) {
   server.tool(
     'qq_get_self_image',

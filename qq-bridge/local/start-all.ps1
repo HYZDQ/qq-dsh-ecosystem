@@ -22,7 +22,7 @@ function Test-ListenPort([int]$port) {
 }
 
 Say '============================================================' Cyan
-Say '  QQ 一键启动（DeepSeek Harness 桌面版 + SnowLuma + qq-bridge）' Cyan
+Say '  QQ 一键启动（DeepSeek Harness 桌面版 + SnowLuma + 本地 TTS + qq-bridge）' Cyan
 Say '============================================================' Cyan
 Say ''
 
@@ -55,19 +55,19 @@ try {
 
 $dshProcs = @(Get-Process -Name 'DeepSeek Harness' -ErrorAction SilentlyContinue)
 if ($dshProcs.Count -gt 0) {
-  Say ("[1/3] DeepSeek Harness 桌面版已在运行（PID {0}）" -f $dshProcs[0].Id) Green
+  Say ("[1/4] DeepSeek Harness 桌面版已在运行（PID {0}）" -f $dshProcs[0].Id) Green
 } else {
   $dshExe = 'D:\DeepSeek Harness\DeepSeek Harness.exe'
   if (Test-Path $dshExe) {
     if ($DryRun) {
-      Say "[1/3] [DryRun] 将启动 DSH 桌面版：$dshExe" Yellow
+      Say "[1/4] [DryRun] 将启动 DSH 桌面版：$dshExe" Yellow
     } else {
-      Say '[1/3] 未检测到 DSH 桌面版，正在启动…' Yellow
+      Say '[1/4] 未检测到 DSH 桌面版，正在启动…' Yellow
       Start-Process -FilePath $dshExe
       Start-Sleep -Seconds 3
     }
   } else {
-    Say ("[1/3] [警告] 未找到 {0}，请手动启动 DSH 桌面版。" -f $dshExe) Yellow
+    Say ("[1/4] [警告] 未找到 {0}，请手动启动 DSH 桌面版。" -f $dshExe) Yellow
     $Fail = $true
   }
 }
@@ -76,13 +76,13 @@ $slDir = Join-Path $Root 'SnowLuma'
 $slLauncher = Join-Path $slDir 'launcher.bat'
 $slUp = (Test-ListenPort $httpPort) -or (Test-ListenPort $wsPort)
 if ($slUp) {
-  Say ("[2/3] SnowLuma 已在线（OneBot 端口 {0}/{1} 在监听）" -f $httpPort, $wsPort) Green
+  Say ("[2/4] SnowLuma 已在线（OneBot 端口 {0}/{1} 在监听）" -f $httpPort, $wsPort) Green
 } elseif (Test-Path $slLauncher) {
   if ($DryRun) {
-    Say ("[2/3] [DryRun] 将启动 SnowLuma：{0}，并等待端口 {1}/{2}" -f $slLauncher, $httpPort, $wsPort) Yellow
+    Say ("[2/4] [DryRun] 将启动 SnowLuma：{0}，并等待端口 {1}/{2}" -f $slLauncher, $httpPort, $wsPort) Yellow
     Say '[DryRun] 将先清理残留的 snowluma-update-* 暂存目录（避免 updater 启动即 EPERM）。' Yellow
   } else {
-    Say ("[2/3] 未检测到 SnowLuma（端口 {0}/{1} 未监听），正在启动 launcher.bat…" -f $httpPort, $wsPort) Yellow
+    Say ("[2/4] 未检测到 SnowLuma（端口 {0}/{1} 未监听），正在启动 launcher.bat…" -f $httpPort, $wsPort) Yellow
     Say '      这是你本机已安装的 SnowLuma；桥接程序本身不代启、不代装（遵守其 EULA）。' DarkGray
 
     # SnowLuma 每次启动时 updater 都会 rmdir 上一次留下的 snowluma-update-* 暂存目录；
@@ -122,8 +122,11 @@ if ($slUp) {
         Say '      已解除 launcher.bat 的 Internet 锁定标记。' DarkGray
       }
     } catch {}
-    # 用 cmd.exe 调起 launcher.bat（不经过 ShellExecute，不会再触发文件安全警告）
-    Start-Process -FilePath $env:ComSpec -ArgumentList '/c', ('"{0}"' -f $slLauncher) -WorkingDirectory $slDir
+    # 用 cmd.exe 调起 launcher.bat（不经过 ShellExecute，不会再触发文件安全警告）。
+    # -WindowStyle Hidden 让它拥有**自己的隐藏控制台**：这样后面关掉启动器窗口时，
+    # Windows 不会把 CTRL_CLOSE 送到 SnowLuma，它也就不必跟着一起死。
+    # （2026-10-30 实测：SnowLuma 之前是共享启动器控制台的，关窗口 = 它无声断流，桥接就报 1006。）
+    Start-Process -FilePath $env:ComSpec -ArgumentList '/c', ('"{0}"' -f $slLauncher) -WorkingDirectory $slDir -WindowStyle Hidden
     $deadline = (Get-Date).AddSeconds(90)
     $ticks = 0
     $integrityWarned = $false
@@ -159,7 +162,7 @@ if ($slUp) {
     }
   }
 } else {
-  Say ("[2/3] [警告] 未找到 {0}，请手动启动 SnowLuma。" -f $slLauncher) Yellow
+  Say ("[2/4] [警告] 未找到 {0}，请手动启动 SnowLuma。" -f $slLauncher) Yellow
   $Fail = $true
 }
 Say '      提示：SnowLuma 首次使用需要在其 WebUI 完成 QQ 登录；端口见 qq-bridge\config.json。' DarkGray
@@ -197,7 +200,85 @@ if (-not $DryRun) {
   Say ('[DryRun] 将打开：http://127.0.0.1:{0}/?token=*** 与 {1}' -f $consolePort, $snowUrl) Yellow
 }
 
-Say '[3/3] 启动 qq-bridge（自动探测 DSH 端口；DSH 重启换端口会自动跟随）…' Cyan
+# ── [3/4] 本地语音合成（TTS）：WSL 里的 audiocpp 引擎 + sidecar ────────────────
+# 只在 config.json 的 tts.enabled=true 时才启动：关掉 TTS 的部署完全不受影响。
+# 失败**不**置 $Fail —— 语音是可选能力，引擎没起来时桥接会自动降级成文字回复。
+$ttsPort = 18100
+try { if ($cfg.tts.baseUrl) { $ttsPort = ([uri]$cfg.tts.baseUrl).Port } } catch {}
+$ttsEnabled = $false
+try { $ttsEnabled = ($cfg.tts -and $cfg.tts.enabled -eq $true) } catch {}
+$ttsDistro = 'Ubuntu-22.04'
+
+if (-not $ttsEnabled) {
+  Say '[3/4] 本地语音合成未启用（tts.enabled=false），跳过。' Green
+} elseif ($DryRun) {
+  Say ("[3/4] [DryRun] 将启动 WSL 发行版 {0} 里的 audiocpp + tts-sidecar，并等待端口 {1} 就绪。" -f $ttsDistro, $ttsPort) Yellow
+} else {
+  # 先把服务拉起来（顺带唤醒 WSL VM；服务是 systemd enable 过的，重复 start 无副作用）。
+  $wslOut = ''
+  try {
+    $wslOut = (& wsl.exe -d $ttsDistro -u root -- systemctl start audiocpp tts-sidecar 2>&1 | Out-String).Trim()
+    $wslCode = $LASTEXITCODE
+  } catch {
+    $wslCode = 1
+    $wslOut = $_.Exception.Message
+  }
+  if ($wslCode -ne 0) {
+    Say ("[3/4] [警告] 启动 WSL 服务失败（退出码 {0}）：{1}" -f $wslCode, $wslOut) Yellow
+    Say '      语音功能会降级为文字回复；排查：wsl -d Ubuntu-22.04 -u root -- journalctl -u tts-sidecar -n 30' Yellow
+  } else {
+    # 常驻：用一个 detached 的 WSL 会话把 VM 顶住（模型加载后就能一直留在内存里）。
+    # 旧方案是"每 5 分钟唤醒一次"，实测 VM 一空闲就关、服务跟着退出、模型白加载。
+    # 注意不能用 Start-Process 直接挂 wsl：控制台型进程会被掐掉（0xC000013A），
+    # 所以统一走 local\wsl-keeper.mjs（Node detached spawn，不继承控制台）。
+    $keeperPidFile = Join-Path $Repo 'state\wsl-keeper.pid'
+    $keeperOut = ''
+    try {
+      $keeperOut = (& node (Join-Path $PSScriptRoot 'wsl-keeper.mjs') $ttsDistro 2>&1 | Out-String).Trim()
+      if ($keeperOut -match 'KEEPER_EXISTS pid=(\d+)') {
+        Say ("      常驻会话已在运行（PID {0}），TTS 会一直留在内存里。" -f $matches[1]) DarkGray
+      } elseif ($keeperOut -match 'KEEPER_STARTED pid=(\d+)') {
+        Say ("      已启动常驻会话（PID {0}）：合成过一次后模型会一直驻留。" -f $matches[1]) DarkGray
+      } else {
+        Say ("      [警告] 常驻会话输出异常：{0}（WSL 可能仍会被闲置关停）" -f $keeperOut) Yellow
+      }
+    } catch {
+      Say ("      [警告] 常驻会话启动失败：{0}（WSL 仍会被闲置关停）" -f $_.Exception.Message) Yellow
+    }
+    # 旧保活任务（每 5 分钟唤醒）已不需要，存在就删掉，避免它和常驻会话重复拉扯。
+    try {
+      & schtasks.exe /query /tn 'WSL KeepAlive' 2>&1 | Out-Null
+      if ($LASTEXITCODE -eq 0) {
+        & schtasks.exe /delete /tn 'WSL KeepAlive' /f 2>&1 | Out-Null
+        Say '      已移除旧的"每 5 分钟唤醒"任务（改由常驻会话维持）。' DarkGray
+      }
+    } catch {}
+
+    # 等 sidecar 的 /health 回 ready（引擎是懒加载，这里只等它"能应答"，不预热模型）。
+    $deadline = (Get-Date).AddSeconds(40)
+    $ttsReady = $false
+    while ((Get-Date) -lt $deadline) {
+      try {
+        $r = Invoke-RestMethod -Uri ("http://127.0.0.1:{0}/health" -f $ttsPort) -TimeoutSec 5 -UseBasicParsing
+        if ($r.ready -eq $true) { $ttsReady = $true; break }
+      } catch {}
+      Write-Host '.' -NoNewline
+      Start-Sleep -Seconds 2
+    }
+    if ($ttsReady) {
+      Write-Host ''
+      Say ("[3/4] 本地语音合成已就绪（引擎 + sidecar 在线，端口 {0}）。" -f $ttsPort) Green
+      Say '      首次合成要加载模型（CPU 约 30 秒），之后每句十几秒。' DarkGray
+    } else {
+      Write-Host ''
+      Say ("[3/4] [警告] 等了 40 秒 sidecar 仍未就绪（端口 {0}）。" -f $ttsPort) Yellow
+      Say '      桥接仍会正常启动，语音失败会自动改文字；排查：' Yellow
+      Say ('      wsl -d {0} -u root -- systemctl status audiocpp tts-sidecar --no-pager' -f $ttsDistro) Yellow
+    }
+  }
+}
+
+Say '[4/4] 启动 qq-bridge（自动探测 DSH 端口；DSH 重启换端口会自动跟随）…' Cyan
 if ($DryRun) {
   Say '[DryRun] 将执行：node scripts\harden-state-acl.mjs --quiet' Yellow
   Say '[DryRun] 将执行：node local\desktop-dsh-supervisor.mjs' Yellow

@@ -410,6 +410,29 @@ async function publishComment(cdp, { awemeId, text, rootCid = '', replyCid = '' 
   }
 }
 
+/**
+ * 回复前“看画面”（2026-10-29 使用者要求的升级）：打开作品页等视频就绪，抓 2 帧 JPEG
+ * 内联 base64（开头 + 3 秒后），喂给视觉模型。抓不到就返回空数组，调用方退回文字上下文。
+ */
+async function captureVideoFrames(cdp, awemeId) {
+  const frames = []
+  try {
+    await cdp.navigate(`${BASE}/video/${awemeId}`)
+    await sleepMs(6500)
+    for (let i = 0; i < 10; i += 1) {
+      const ready = await cdp.evaluate(`(() => { const v = document.querySelector('video'); return v && v.readyState >= 2 && v.getBoundingClientRect().width > 40 ? 1 : 0; })()`).catch(() => 0)
+      if (ready) break
+      await sleepMs(800)
+    }
+    for (let i = 0; i < 2; i += 1) {
+      const shot = await cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 65 }).catch(() => null)
+      if (shot?.data) frames.push({ mimeType: 'image/jpeg', data: shot.data })
+      if (i === 0) await sleepMs(2500)
+    }
+  } catch { /* 抓不到就退回文字上下文 */ }
+  return frames
+}
+
 // 登录态失效自动唤人（2026-10-27 新增）：工具结果出现登录失效/需验证/被拦截时，
 // 主动给 QQ 主人发提醒（30 分钟冷却），不再只留一句干巴巴的工具报错。
 const loginLostNotice = { lastAt: 0 };
@@ -2395,7 +2418,7 @@ export function createTools(svc) {
     }
     return { reply: s.slice(0, 60), needExpert: false, question: '' }
   }
-  const generateCommentReply = async ({ commentText, commentUser, isOwner, expertAnswer }) => {
+  const generateCommentReply = async ({ commentText, commentUser, isOwner, expertAnswer, video, frames }) => {
     let llm
     try { llm = svc.ctx?.get?.('llm') } catch { llm = undefined }
     if (!llm || typeof llm.stream !== 'function') throw new Error('DSH 模型服务不可用，未生成评论回复。')
@@ -2403,12 +2426,25 @@ export function createTools(svc) {
     const system = [
       '你是大肥鱼，正在抖音评论区公开回复。只输出一行 JSON（不要代码块）：{"reply":"回复内容","needExpert":false,"question":""}',
       '规则：reply 不超过 60 字，口语化、真诚、像真人评论；不带链接、不带@、不带话题标签。',
-      '答不上、不确定、或问题涉实时信息时，needExpert 置 true，把想问豆包的具体问题放进 question（不超过 80 字）。',
+      '附了视频画面时以画面实际内容为准；答不上、不确定、或问题涉实时信息时，needExpert 置 true，把想问豆包的具体问题放进 question（不超过 80 字）。',
       expertAnswer ? '豆包已给出参考答案，把它口语化总结给对方，可以提一句“我问了豆包”。' : '',
       `你的人格：${persona}`,
     ].filter(Boolean).join('\n')
-    const user = `${commentUser}${isOwner ? '（主人）' : ''} 在评论区说：「${commentText}」${expertAnswer ? `豆包的参考答案：「${expertAnswer}」` : ''}`
-    const messages = [{ id: `cmt-${Date.now()}-${Math.random().toString(36).slice(2)}`, role: 'user', content: [{ type: 'text', text: user }], source: { kind: 'plugin', plugin: 'douyin-browser', form: 'snapshot', sections: [] } }]
+    const videoNote = video?.title ? `这条视频：《${video.title}》${video.author ? ` · @${video.author}` : ''}` : ''
+    const user = `${videoNote}${videoNote ? '\n' : ''}${commentUser}${isOwner ? '（主人）' : ''} 在评论区说：「${commentText}」${expertAnswer ? `豆包的参考答案：「${expertAnswer}」` : ''}`
+    // 画面采样（2026-10-29 升级）：带 2 帧视频画面喂视觉模型；模型看不了画面就退回文字并留痕，不冒充看过。
+    const blocks = [{ type: 'text', text: user }]
+    if (Array.isArray(frames) && frames.length) {
+      try {
+        const attachments = svc.ctx?.get?.('attachments')
+        const info = await llm.resolveModelInfo(modelRoute.provider, modelRoute.model)
+        if (attachments?.saveImages && info?.inputModalities?.includes('image')) {
+          const saved = await attachments.saveImages(frames.slice(0, 2).map(f => ({ data: Buffer.from(f.data, 'base64'), mediaType: f.mimeType })))
+          for (const ref of Array.isArray(saved) ? saved : []) if (ref?.attachmentId) blocks.push({ type: 'image', attachment: ref })
+        } else { try { log.log('comment-duty 画面：当前模型不接收画面，本次回复只用文字上下文。') } catch { /* 忽略 */ } }
+      } catch (error) { try { log.log(`comment-duty 画面不可用：${error?.message || error}`) } catch { /* 忽略 */ } }
+    }
+    const messages = [{ id: `cmt-${Date.now()}-${Math.random().toString(36).slice(2)}`, role: 'user', content: blocks, source: { kind: 'plugin', plugin: 'douyin-browser', form: 'snapshot', sections: [] } }]
     let text = '', finish
     for await (const chunk of llm.stream({ provider: modelRoute.provider, model: modelRoute.model, messages, system, maxTokens: 400 })) {
       if (chunk.type === 'text-delta') text += chunk.text
@@ -2435,6 +2471,8 @@ export function createTools(svc) {
         },
         fetchComments: (cdp, id, opts) => fetchComments(cdp, id, opts),
         fetchAtMe: (cdp) => fetchAtMe(cdp),
+        fetchVideoDetail: (cdp, id) => fetchVideoDetail(cdp, id),
+        captureFrames: ({ awemeId }) => withDouyin(svc, (cdp) => captureVideoFrames(cdp, awemeId), { mode: 'visible', reuseAny: false }),
         generate: generateCommentReply,
         notify: async (text) => { try { const conn = svc.bridge(); await sendToOwner(conn, text, { maxChars: 800, gapMs: 1200 }) } catch { /* 通知失败不阻塞值班 */ } },
         onEvent: (event) => { try { log.log(`comment-duty ${event.type}: ${event.message || ''}`) } catch { /* 日志失败忽略 */ } },

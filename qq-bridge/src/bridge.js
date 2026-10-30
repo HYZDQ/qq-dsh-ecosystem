@@ -33,6 +33,10 @@ import {
 // 桥接只负责白名单/限流/审计与真正的 OneBot 发送，检索与下载校验复用那一份实现。
 import { normalizeImageSearchConfig, createImageSearchService, defaultImageFetchers } from '../../qq-image/src/image-search.js';
 import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './send-voice-lib.js';
+// 本地语音合成（TTS）客户端：只跟 WSL 里的 sidecar 说话，产物落进语音库内的 audio/tts/。
+import { createTtsClient, normalizeTtsConfig, preprocessTtsText, stripUnknownBracketTags, TTS_CODES, TtsError } from './tts-client.js';
+// 音色库（克隆音色）登记表：参考音频在 state/tts-refs/，名字与元数据在 state/tts-voices.json。
+import { createVoiceStore, normalizeVoiceName } from './tts-voices.js';
 import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken } from './snowluma-conn.js';
 import { hardenDir, manualDirCommand } from './state-acl.mjs';
 import { extractForwardIds, forwardIdFromData, sanitizeForwardId, formatForwardResponse } from './forward.js';
@@ -93,7 +97,7 @@ import {
   resetPad as simResetPad
 } from './simulation/affect.js';
 // 表现面层（GEN3_SURFACE_INTEGRATION_PLAN S0）：surface-token 凭据（H6 与 console-token 分离）+ 健康视图。
-import { createSurfaceTokenManager } from './surface/token.js';
+import { createSurfaceTokenManager, SURFACE_TOKEN_ROUTES } from './surface/token.js';
 import { buildSurfaceStatus } from './surface/health.js';
 // 表现面 S2：空间写作上下文（H2 只取主人私聊）+ 素材预取（writer 仍零工具）。
 import { buildQzoneWriterContext } from './surface/qzone-context.js';
@@ -150,6 +154,12 @@ const TOOL_LOG_FILE = path.join(STATE_DIR, 'tool-calls.jsonl');
 const TOKEN_USAGE_FILE = path.join(STATE_DIR, 'token-usage.jsonl');
 const ACTIVITY_LOG = path.join(STATE_DIR, 'qq-activity.log');
 const BRIDGE_LOG = path.join(STATE_DIR, 'bridge.log');
+// TTS 每日条数计数（{ date: 'YYYY-MM-DD', count: n }）：跨进程重启也要延续，否则重启就能重置限额。
+const TTS_STATE_FILE = path.join(STATE_DIR, 'tts-state.json');
+// 克隆音色的参考音频与登记表（sidecar 的 --refs-root 必须指向同一个目录）。
+const TTS_REFS_DIR = path.join(STATE_DIR, 'tts-refs');
+const TTS_VOICES_FILE = path.join(STATE_DIR, 'tts-voices.json');
+const ttsVoices = createVoiceStore({ file: TTS_VOICES_FILE, refsDir: TTS_REFS_DIR });
 
 /**
  * 模式拼写的**唯一**归一入口（输入边界）。
@@ -1059,6 +1069,41 @@ function loadConfig() {
     ...(cfg.socialV2?.voice ?? {})
   };
 
+  // tts：本地语音合成（Breeze TTS 2 / audio.cpp，跑在 WSL 的 sidecar 上）。
+  //
+  // 默认**关闭**：enabled=false 时 `qq_tts_say` 根本不注册、不合成、行为与现网完全一致。
+  // 打开前必须先让 sidecar 起来（见 docs/guides/TTS.md）。这里只放默认值，
+  // 真正的归一/钳制/越界降级都在 src/tts-client.js 的 normalizeTtsConfig（单一入口）。
+  cfg.tts = {
+    enabled: false,
+    baseUrl: 'http://127.0.0.1:18100',
+    // CPU 推理实测（8 线程、Q4_0）：3 字 ≈ 7s，22 字 ≈ 18s，76 字 ≈ 48s（首次加载模型 31s）。
+    // 默认给 180s：120 字的最坏情况（~70s）加上串行排队也不会被误杀。
+    timeoutMs: 180000,
+    maxChars: 120,
+    outDir: 'audio/tts',
+    mode: 'design',
+    voiceDesign: '一位温柔自信的年轻女性，声音清晰，语气亲切，表达轻快而富有感染力。',
+    refAudio: '',
+    refText: '',
+    // 默认克隆音色（音色库里的名字）。空 = 用 voiceDesign 的文字描述。
+    voice: '',
+    // 私聊 / 群聊各自的默认音色；空 = 继承 voice。
+    voicePrivate: '',
+    voiceGroup: '',
+    instruction: '',
+    cfgScale: 4,
+    speed: 1,
+    keepDays: 7,
+    fallbackToText: true,
+    // 预留给「主动冒泡也发语音」；主动链路当前只发文本，所以它现在只是一个显式关闭的开关。
+    allowProactive: false,
+    dailyLimit: 0,
+    // 必须读 `file.tts`：这里 cfg 还在组装中，`cfg.tts` 此刻恒为 undefined，
+    // 写成 `cfg.tts` 会让用户的配置被整段默认值吞掉（enabled 永远是 false）。
+    ...(file.tts && typeof file.tts === 'object' && !Array.isArray(file.tts) ? file.tts : {})
+  };
+
   // socialV2.sticker.collect 也需要深度合并，避免旧配置缺失 collect 子项时丢默认值。
   cfg.socialV2.sticker = {
     enabled: true,
@@ -1809,6 +1854,168 @@ async function main() {
       loudness: v.loudness || 'normal',
       ffmpegPath: process.env.FFMPEG_PATH || v.ffmpegPath || null,
       autoReadback: v.autoReadback !== false
+    };
+  }
+
+  /**
+   * TTS 配置归一（单一入口）。每次都读实时 cfg，这样控制台改完配置不用重启。
+   *
+   * 归一里包含**反向校验**：outDir 必须落在语音库内，baseUrl 必须回环 —— 写错不会开门，
+   * 只会降级并告警（告警去重，避免每轮唤醒都刷一遍 bridge.log）。
+   */
+  let ttsWarned = new Set();
+  /**
+   * 热读 config.json 的 tts 段。
+   *
+   * `cfg.tts` 只在进程启动时加载一次，改「默认音色 / 开关 / 音色描述」都得重启桥接——
+   * 而 tts 段本来就是低频配置，每次按需读一次文件（几 KB）成本可以忽略，
+   * 换来的是改完立刻生效（控制台、AI 通道、状态卡片一起变）。
+   */
+  function ttsRaw() {
+    try {
+      const file = readConfigObject(path.join(ROOT, 'config.json'));
+      if (file?.tts && typeof file.tts === 'object' && !Array.isArray(file.tts)) {
+        return { ...(cfg.tts ?? {}), ...file.tts };
+      }
+    } catch { /* 读失败就用启动时那份 */ }
+    return cfg.tts ?? {};
+  }
+  function ttsCfg() {
+    const vc = voiceCfg();
+    const t = normalizeTtsConfig(ttsRaw(), { root: ROOT, voiceDir: vc.dir });
+    for (const w of t.warnings) {
+      if (ttsWarned.has(w)) continue;
+      ttsWarned.add(w);
+      log(`⚠️ [tts] ${w}`);
+      appendActivity(`[tts] 配置告警：${w}`);
+    }
+    return t;
+  }
+
+  /** TTS 工具是否可用（注册闸门与调用闸门共用同一个判断，避免两处漂移）。 */
+  function ttsAvailable() {
+    return ttsCfg().enabled === true
+      && cfg.socialV2?.voice?.enabled !== false
+      && cfg.socialV2?.tools?.sendVoice !== false;
+  }
+
+  // 每日条数（跨重启延续）：只用于 dailyLimit，0 = 不限。
+  function ttsDailyState() {
+    const st = readJsonSafe(TTS_STATE_FILE, { date: '', count: 0 });
+    const today = new Date().toISOString().slice(0, 10);
+    if (st.date !== today) return { date: today, count: 0 };
+    return { date: today, count: Number(st.count) || 0 };
+  }
+  function ttsDailyCheck(limit) {
+    if (!limit) return;
+    const st = ttsDailyState();
+    if (st.count >= limit) throw new TtsError(TTS_CODES.BAD_REQUEST, `今日语音条数已达上限（tts.dailyLimit=${limit}）`);
+  }
+  function ttsDailyCommit() {
+    const st = ttsDailyState();
+    try {
+      fs.writeFileSync(TTS_STATE_FILE, JSON.stringify({ date: st.date, count: st.count + 1 }));
+    } catch (error) {
+      log(`[tts] 写入每日计数失败（不影响已发送）：${error?.message ?? error}`);
+    }
+  }
+
+  /**
+   * 清理过期合成产物（keepDays=0 表示不清理）。
+   * 只动 tts.outDir 之内、且文件名是纯 sha1 的产物 —— 用户自己放进去的文件一律不碰。
+   */
+  function ttsCleanup() {
+    const t = ttsCfg();
+    if (!t.keepDays) return { removed: 0 };
+    const cutoff = Date.now() - t.keepDays * 24 * 3600 * 1000;
+    let removed = 0;
+    try {
+      const dayDirs = fs.readdirSync(t.outDir, { withFileTypes: true }).filter((d) => d.isDirectory());
+      for (const d of dayDirs) {
+        const dirAbs = path.join(t.outDir, d.name);
+        for (const f of fs.readdirSync(dirAbs)) {
+          if (!/^[0-9a-f]{40}\.wav$/.test(f)) continue; // 只删本模块自己产出的 sha1.wav
+          const abs = path.join(dirAbs, f);
+          try {
+            if (fs.statSync(abs).mtimeMs < cutoff) { fs.unlinkSync(abs); removed += 1; }
+          } catch { }
+        }
+        try {
+          if (fs.readdirSync(dirAbs).length === 0) fs.rmdirSync(dirAbs);
+        } catch { }
+      }
+    } catch { /* 目录不存在 = 没有产物 */ }
+    if (removed) log(`[tts] 清理过期合成产物 ${removed} 个（keepDays=${t.keepDays}）`);
+    return { removed };
+  }
+
+  /**
+   * 合成一段语音并返回**语音库内的绝对路径**。
+   *
+   * 关键：sidecar 返回的 `relPath` 是相对语音库根目录的（如 `tts/20261030/<sha1>.wav`），
+   * 必须再过一次 `safeJoinLibrary`（含 realpath 复核），绝不信任服务端给的路径字符串。
+   */
+  async function ttsSynthesize({ text, mode, voiceDesign, refAudio, refName, refText, instruction, speed, cfgScale, sessionKey }) {
+    const t = ttsCfg();
+    if (!t.enabled) throw new TtsError(TTS_CODES.DISABLED, '语音合成已关闭（tts.enabled=false）');
+    // §8.5 的顺序：style 改写发生在调用方（sendVoiceForV2 之前），这里只做清洗与截断。
+    const clean = preprocessTtsText(stripUnknownBracketTags(text ?? ''), { maxChars: t.maxChars });
+    if (!clean) throw new TtsError(TTS_CODES.BAD_REQUEST, '合成文本清洗后为空（去掉表情/链接/@ 后没有可念的内容）');
+    const client = createTtsClient({ baseUrl: t.baseUrl, timeoutMs: t.timeoutMs });
+    // 默认音色：调用方（尤其是 AI 的 qq_tts_say）通常什么都不传，
+    // 这时用 config.json 的 tts.voice 指向的克隆音色；它不存在就退回文字描述（不报错）。
+    let useMode = mode;
+    let useRefName = refName;
+    let useRefText = refText;
+    let usedVoice = null;
+    if (!useMode && !useRefName && !voiceDesign) {
+      // 先按场景取默认音色（私聊 / 群聊各自一个），没配就继承通用 tts.voice。
+      const kind = String(sessionKey || '').split(':')[0];
+      const preferred = (kind === 'private' ? (t.voicePrivate || t.voice)
+        : kind === 'group' ? (t.voiceGroup || t.voice)
+          : t.voice);
+      const def = preferred ? ttsVoices.get(preferred) : null;
+      if (def && def.exists) {
+        useMode = 'clone';
+        useRefName = path.basename(def.file);
+        useRefText = def.refText;
+        usedVoice = def.name;
+      }
+    }
+    const decidedMode = useMode || t.mode;
+    const payload = {
+      text: clean,
+      mode: decidedMode,
+      outDir: t.outDirRel
+    };
+    if (decidedMode === 'design') {
+      payload.voiceDesign = voiceDesign || t.voiceDesign;
+    } else {
+      // 优先传「名字」（文件名）：桥接是 Windows 路径，sidecar 在 WSL 里，两端命名空间不同。
+      if (useRefName) payload.refName = path.basename(String(useRefName));
+      else payload.refAudio = refAudio || t.refAudio;
+      payload.refText = useRefText || t.refText;
+      if (decidedMode === 'direction') payload.instruction = instruction || t.instruction;
+    }
+    payload.speed = Number(speed ?? t.speed) || 1;
+    payload.cfgScale = Number(cfgScale ?? t.cfgScale);
+    const started = Date.now();
+    const out = await client.synthesize(payload);
+    const abs = safeJoinLibrary(t.dir, out.relPath);
+    if (!abs || !fs.existsSync(abs)) {
+      throw new TtsError(TTS_CODES.ENGINE_ERROR, '合成产物不在语音库内（已拒绝发送）');
+    }
+    const info = await inspectAudio(abs, { maxBytes: voiceCfg().maxBytes, maxSeconds: voiceCfg().maxSeconds });
+    if (!info.ok) throw new TtsError(TTS_CODES.ENGINE_ERROR, `合成产物不可发送：${info.error}`);
+    return {
+      path: abs,
+      relPath: out.relPath,
+      bytes: info.size,
+      durationSec: info.duration ?? out.durationSec ?? null,
+      elapsedMs: Number(out.elapsedMs) || (Date.now() - started),
+      cached: out.cached === true,
+      voice: usedVoice,
+      text: clean
     };
   }
 
@@ -4905,8 +5112,8 @@ ${roleText ? `【角色设定】\n${roleText}\n\n` : ''}${recentText ? `【最�
         res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...SECURITY_HEADERS });
         res.end(JSON.stringify(obj, null, 2));
       };
-      const readBody = () => new Promise((resolve, reject) => {
-        const MAX_BODY_BYTES = 1_000_000;
+      const readBody = (maxBytes = 1_000_000) => new Promise((resolve, reject) => {
+        const MAX_BODY_BYTES = maxBytes;
         const chunks = [];
         let total = 0;
         let settled = false;
@@ -4928,7 +5135,7 @@ ${roleText ? `【角色设定】\n${roleText}\n\n` : ''}${recentText ? `【最�
         // 提前按 Content-Length 拒绝超限请求体
         const declared = Number(req.headers['content-length']);
         if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
-          fail(413, '请求体过大（超过 1MB）');
+          fail(413, `请求体过大（超过 ${Math.round(MAX_BODY_BYTES / 1024)}KB）`);
           return;
         }
         bodyTimer = setTimeout(() => fail(400, '请求体读取超时'), 30000);
@@ -6460,7 +6667,7 @@ ${roleText ? `【角色设定】\n${roleText}\n\n` : ''}${recentText ? `【最�
           const current = fileV2 ?? ((cfg.socialV2 && typeof cfg.socialV2 === 'object') ? cfg.socialV2 : {});
           const merged = { ...current, ...body };
           // 子对象必须是非 null 对象；null/数组/基本类型会覆盖默认值导致工具开关被绕过，这里直接保留当前值。
-          for (const sub of ['tools', 'wake', 'send', 'wait', 'proactive', 'sticker', 'feedback', 'context']) {
+          for (const sub of ['tools', 'wake', 'send', 'wait', 'proactive', 'sticker', 'feedback', 'context', 'voice']) {
             if (body[sub] !== undefined && (body[sub] === null || typeof body[sub] !== 'object' || Array.isArray(body[sub]))) {
               merged[sub] = current[sub] ?? {};
             }
@@ -6476,6 +6683,21 @@ ${roleText ? `【角色设定】\n${roleText}\n\n` : ''}${recentText ? `【最�
             for (const k of toolFlags) {
               if (typeof merged.tools[k] !== 'boolean') merged.tools[k] = current.tools?.[k] !== false;
             }
+          }
+          // voice：语音发送（总开关 + 时长/体积/频率上限）。
+          // 控制台「三代仿真 → 基础」只提交一个 enabled，这里必须做**深合并**，
+          // 否则整段覆盖会把 dir / 上限一起冲掉（voiceCfg() 再从默认值兜底，等于静默改配置）。
+          if (body.voice && typeof body.voice === 'object') {
+            merged.voice = { ...(current.voice ?? {}), ...body.voice };
+            if (merged.voice.enabled !== undefined) merged.voice.enabled = merged.voice.enabled === true;
+            for (const k of ['maxSeconds', 'maxBytes', 'maxPerMinute', 'maxPerHour', 'defaultVolume']) {
+              if (merged.voice[k] === undefined) continue;
+              const n = Number(merged.voice[k]);
+              merged.voice[k] = Number.isFinite(n) && n >= 0 ? n : (current.voice?.[k] ?? 0);
+            }
+            if (merged.voice.allowAbsolutePath !== undefined) merged.voice.allowAbsolutePath = merged.voice.allowAbsolutePath === true;
+            if (merged.voice.autoReadback !== undefined) merged.voice.autoReadback = merged.voice.autoReadback === true;
+            if (merged.voice.dir !== undefined) merged.voice.dir = String(merged.voice.dir ?? 'audio');
           }
           // wake：数值与字符串数组归一化
           if (body.wake && typeof body.wake === 'object') {
@@ -7708,6 +7930,318 @@ ${roleText ? `【角色设定】\n${roleText}\n\n` : ''}${recentText ? `【最�
             });
           } catch (error) {
             sendJson({ ok: false, error: error?.message ?? String(error) }, 500);
+          }
+          return;
+        }
+
+        // ── 本地语音合成（TTS · 操作者通道：控制台 / CLI，凭 consoleToken） ──────
+        //
+        // 合成与发送**分成两步**，好让控制台能"只试听不发送"（dryRun）：
+        //   - 不带 target / dryRun=true → 只合成，返回库内相对路径与耗时（产物留在 audio/tts/）；
+        //   - 带 target → 合成成功后走与 /api/voice/send 完全一样的解析/限流/发送/回读。
+        // 合成本身**不**产生外发：sidecar 只写本地文件（且只能是语音库内的 audio/tts/）。
+        if (req.method === 'GET' && url.pathname === '/api/voice/tts/status') {
+          const t = ttsCfg();
+          const health = t.enabled
+            ? await createTtsClient({ baseUrl: t.baseUrl, timeoutMs: t.timeoutMs }).health()
+            : { ok: false, ready: false, error: 'tts_disabled: 合成已关闭（tts.enabled=false）' };
+          sendJson({
+            ok: true,
+            enabled: t.enabled,
+            available: ttsAvailable(),
+            baseUrl: t.baseUrl,
+            mode: t.mode,
+            maxChars: t.maxChars,
+            outDir: t.outDir,
+            outDirRel: t.outDirRel,
+            keepDays: t.keepDays,
+            dailyLimit: t.dailyLimit,
+            todayCount: ttsDailyState().count,
+            speed: t.speed,
+            cfgScale: t.cfgScale,
+            voiceDesign: t.voiceDesign,
+            instruction: t.instruction,
+            hasRef: Boolean(t.refAudio),
+            voiceCount: ttsVoices.list().length,
+            // 默认克隆音色（config.json 的 tts.voice）；控制台据此把下拉预选中它。
+            defaultVoice: t.voice,
+            defaultVoicePrivate: t.voicePrivate,
+            defaultVoiceGroup: t.voiceGroup,
+            warnings: t.warnings,
+            health
+          });
+          return;
+        }
+
+        // ── 克隆音色（参考音频 + 名字） ────────────────────────────────────────
+        //
+        // 参考音频**不进语音库**：语音库会被 qq_list_voices 枚举、可能被当成语音发到群里。
+        // 这里放在 state/tts-refs/，sidecar 的 --refs-root 指向同一目录，由它用 ffmpeg 转 24k 单声道。
+        if (req.method === 'GET' && url.pathname === '/api/voice/tts/voices') {
+          sendJson({
+            ok: true,
+            voices: ttsVoices.list().map((v) => ({
+              name: v.name,
+              refText: v.refText,
+              durationSec: v.durationSec,
+              bytes: v.bytes,
+              createdAt: v.createdAt,
+              exists: v.exists
+            }))
+          });
+          return;
+        }
+
+        if (req.method === 'POST' && url.pathname === '/api/voice/tts/voices') {
+          const t = ttsCfg();
+          if (!t.enabled) { sendJson({ ok: false, error: '语音合成已关闭（tts.enabled=false）', code: TTS_CODES.DISABLED }, 403); return; }
+          let body;
+          try {
+            // 音频以 base64 进 JSON：1MB 的全局上限连一段 20 秒 wav 都装不下，这里单独放宽到 8MB。
+            body = await readBody(8 * 1024 * 1024);
+          } catch (error) {
+            sendJson({ ok: false, error: error?.message ?? String(error) }, error?.statusCode ?? 400);
+            return;
+          }
+          const name = normalizeVoiceName(body.name);
+          if (!name) { sendJson({ ok: false, error: '音色名不合法（1~20 个中文/字母/数字/-_）' }, 400); return; }
+          const refText = String(body.refText ?? '').trim();
+          if (!refText) { sendJson({ ok: false, error: '参考文本不能为空（要跟参考音频里说的话逐字一致）' }, 400); return; }
+          const audio = String(body.audio ?? '').trim();
+          if (!audio) { sendJson({ ok: false, error: '没有收到音频数据' }, 400); return; }
+          try {
+            const client = createTtsClient({ baseUrl: t.baseUrl, timeoutMs: t.timeoutMs });
+            const got = await client.importRef({ name, audio });
+            const entry = ttsVoices.add({
+              name,
+              file: path.basename(String(got.file ?? '')),
+              refText,
+              durationSec: got.durationSec,
+              bytes: got.bytes
+            });
+            appendActivity(`[tts] 音色导入 ${name}（${got.durationSec ?? '?'}s / ${got.bytes ?? '?'} 字节）`);
+            sendJson({
+              ok: true,
+              voice: { name: entry.name, refText: entry.refText, durationSec: entry.durationSec, bytes: entry.bytes, createdAt: entry.createdAt }
+            });
+          } catch (error) {
+            const code = error?.code ?? TTS_CODES.ENGINE_ERROR;
+            log(`[tts] 音色导入失败：${code} ${error?.message ?? error}`);
+            sendJson({ ok: false, error: error?.message ?? String(error), code }, code === TTS_CODES.TIMEOUT ? 504 : 400);
+          }
+          return;
+        }
+
+        if (req.method === 'DELETE' && url.pathname === '/api/voice/tts/voices') {
+          const gone = ttsVoices.remove(url.searchParams.get('name') ?? '');
+          if (!gone) { sendJson({ ok: false, error: '没有这个音色' }, 404); return; }
+          appendActivity(`[tts] 音色删除 ${gone.name}`);
+          sendJson({ ok: true, name: gone.name });
+          return;
+        }
+
+        // 保存「私聊 / 群聊」各自的默认音色（写 config.json 的 tts.voicePrivate / tts.voiceGroup）。
+        // 只接受音色库里的**名字**，且必须真实存在——避免配置里留下一个永远命不中的名字。
+        if (req.method === 'POST' && url.pathname === '/api/voice/tts/default-voice') {
+          const body = await readBody();
+          const pickName = (raw) => {
+            const text = String(raw ?? '').trim();
+            if (!text) return '';
+            const name = normalizeVoiceName(text);
+            if (!name) throw new TtsError(TTS_CODES.BAD_REQUEST, `音色名不合法：${text}`);
+            const hit = ttsVoices.get(name);
+            if (!hit || !hit.exists) throw new TtsError(TTS_CODES.BAD_REQUEST, `音色「${name}」不存在或参考音频丢失`);
+            return hit.name;
+          };
+          try {
+            const configFile = path.join(ROOT, 'config.json');
+            const file = readConfigObject(configFile);
+            const tts = { ...(file.tts && typeof file.tts === 'object' && !Array.isArray(file.tts) ? file.tts : {}) };
+            if (Object.prototype.hasOwnProperty.call(body, 'voicePrivate')) tts.voicePrivate = pickName(body.voicePrivate);
+            if (Object.prototype.hasOwnProperty.call(body, 'voiceGroup')) tts.voiceGroup = pickName(body.voiceGroup);
+            file.tts = tts;
+            atomicWriteJson(configFile, file);
+            appendActivity(`[tts] 默认音色更新：私聊=${tts.voicePrivate || '（未设）'} 群聊=${tts.voiceGroup || '（未设）'}`);
+            sendJson({ ok: true, voicePrivate: tts.voicePrivate || '', voiceGroup: tts.voiceGroup || '' });
+          } catch (error) {
+            sendJson({ ok: false, error: error?.message ?? String(error), code: error?.code ?? TTS_CODES.BAD_REQUEST }, 400);
+          }
+          return;
+        }
+
+        // 保存「音色贴合度」cfgScale（写 config.json 的 tts.cfgScale）。
+        // 桥接每次合成前都会重读 config.json（ttsRaw），所以保存后下一次合成就生效，不用重启。
+        if (req.method === 'POST' && url.pathname === '/api/voice/tts/settings') {
+          const body = await readBody();
+          if (!Object.prototype.hasOwnProperty.call(body, 'cfgScale')) {
+            sendJson({ ok: false, error: '缺少 cfgScale', code: TTS_CODES.BAD_REQUEST }, 400);
+            return;
+          }
+          const raw = Number(body.cfgScale);
+          if (!Number.isFinite(raw) || raw < 0 || raw > 10) {
+            sendJson({ ok: false, error: 'cfgScale 必须是 0~10 的数字', code: TTS_CODES.BAD_REQUEST }, 400);
+            return;
+          }
+          // 保留一位小数：滑块是 step=0.1，别在配置文件里留下 4.999999 这种值。
+          const value = Math.round(raw * 10) / 10;
+          try {
+            const configFile = path.join(ROOT, 'config.json');
+            const file = readConfigObject(configFile);
+            const tts = { ...(file.tts && typeof file.tts === 'object' && !Array.isArray(file.tts) ? file.tts : {}) };
+            tts.cfgScale = value;
+            file.tts = tts;
+            atomicWriteJson(configFile, file);
+            appendActivity(`[tts] 音色贴合度 cfgScale=${value}`);
+            sendJson({ ok: true, cfgScale: value });
+          } catch (error) {
+            sendJson({ ok: false, error: error?.message ?? String(error), code: error?.code ?? TTS_CODES.BAD_REQUEST }, 400);
+          }
+          return;
+        }
+
+        if (req.method === 'POST' && url.pathname === '/api/voice/tts') {
+          const body = await readBody();
+          const t = ttsCfg();
+          if (!t.enabled) { sendJson({ ok: false, error: '语音合成已关闭（tts.enabled=false）', code: TTS_CODES.DISABLED }, 403); return; }
+          const target = String(body.target ?? '').trim();
+          if (target) {
+            const parsedTarget = parseTargetKey(target);
+            if (!parsedTarget) { sendJson({ ok: false, error: 'target 格式应为 group:群号 或 private:QQ号' }, 400); return; }
+            if (!modeAllowed(target, parsedTarget.kind, Number(parsedTarget.id), cfg, currentMode)) {
+              sendJson({ ok: false, error: `目标 ${target} 不在白名单内` }, 403);
+              return;
+            }
+          }
+          // 音色只认**名字**：参考音频路径与逐字稿一律从登记表取，控制台不传路径（传了也不认）。
+          let mode = body.mode;
+          let refAudio = body.refAudio;
+          let refName = null;
+          let refText = body.refText;
+          let voiceName = null;
+          const wantedVoice = normalizeVoiceName(body.voiceName);
+          if (wantedVoice) {
+            const v = ttsVoices.get(wantedVoice);
+            if (!v || !v.exists) { sendJson({ ok: false, error: `音色「${wantedVoice}」不存在或参考音频丢失` }, 400); return; }
+            mode = 'clone';
+            // 只把文件名交给 sidecar：两端文件系统命名空间不同（Windows 路径 WSL 里不存在）。
+            refName = path.basename(v.file);
+            refAudio = null;
+            refText = v.refText;
+            voiceName = v.name;
+          }
+          try {
+            const startedAt = Date.now();
+            const made = await ttsSynthesize({
+              text: body.text,
+              mode,
+              voiceDesign: body.voiceDesign,
+              refAudio,
+              refName,
+              refText,
+              instruction: body.instruction,
+              speed: body.speed,
+              cfgScale: body.cfgScale,
+              // 私聊/群聊默认音色按目标区分；试听没填目标就用通用默认。
+              sessionKey: target || ''
+            });
+            const synthMs = Date.now() - startedAt;
+            appendActivity(`[tts] 合成 ${made.text.length} 字 → ${path.basename(made.path)}（${made.durationSec ?? '?'}s / ${made.bytes} 字节 / ${synthMs}ms${made.cached ? '，命中已有产物' : ''}）`);
+            const baseOut = {
+              ok: true,
+              key: target || null,
+              file: made.path,
+              relPath: made.relPath,
+              text: made.text,
+              bytes: made.bytes,
+              durationSec: made.durationSec,
+              elapsedMs: synthMs,
+              cached: made.cached,
+              voice: voiceName ?? made.voice ?? null
+            };
+            if (!target || body.dryRun === true) {
+              sendJson({ ...baseOut, dryRun: true });
+              return;
+            }
+            voiceBudgetCheck('operator:cli', voiceCfg());
+            const sent = await sendVoiceV2(target, made.path, { guard: false, audit: true, audio: null });
+            voiceBudgetCommit('operator:cli');
+            const verification = body.verify === false ? null : await verifyVoiceMessageSent(sent.messageId);
+            appendActivity(`${target} [tts] (操作者) 合成并发送 ${made.text.length} 字 (${sent.detail}, ${synthMs}ms)`);
+            sendJson({ ...baseOut, dryRun: false, messageId: sent.messageId, verified: verification?.confirmed === true, detail: sent.detail });
+          } catch (error) {
+            const code = error?.code ?? TTS_CODES.ENGINE_ERROR;
+            log(`[tts] 合成失败：${code} ${error?.message ?? error}`);
+            sendJson({ ok: false, error: error?.message ?? String(error), code }, code === TTS_CODES.TIMEOUT ? 504 : 500);
+          }
+          return;
+        }
+
+        // ── 合成并发送（AI 通道：reserved2 + agent token） ──────────────────────
+        //
+        // 闸门与 /api/socialV2/send-voice 一致，另加 `tts.enabled` 与 `tts.dailyLimit`：
+        // 模型只能发它自己那个会话，且合成失败一律**不重试**（错误原样回给模型，让它改打字）。
+        if (req.method === 'POST' && url.pathname === '/api/socialV2/tts-say') {
+          const body = await readBody();
+          const token = String(body.token ?? req.headers['x-agent-token'] ?? '').trim();
+          const key = String(body.key ?? body.target ?? '').trim();
+          const voice = voiceCfg();
+          if (!ttsAvailable()) { sendJson({ ok: false, error: '语音合成未启用（tts.enabled=false 或语音/发送语音工具已关闭）', code: TTS_CODES.DISABLED }, 403); return; }
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空（格式 group:群号 或 private:QQ号）' }, 400); return; }
+          if (currentMode !== 'reserved2') { sendJson({ ok: false, error: '该接口仅 reserved2 模式可用' }, 403); return; }
+          if (!token) { sendJson({ ok: false, error: 'reserved2 模式发送必须携带 agent token' }, 403); return; }
+          if (!agentTokenOk(key, token)) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (!v2ToolEnabled('sendVoice')) { sendJson({ ok: false, error: '工具未启用：qq_send_voice' }, 403); return; }
+          if (!v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+          if (shouldBlockSilentReply(key)) { sendJson({ ok: false, error: '静默模式已开启，当前不允许发送' }, 403); return; }
+          const keyMatch = /^(group|private):(\d+)$/.exec(key);
+          if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
+          const kind = keyMatch[1];
+          const id = Number(keyMatch[2]);
+          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, currentMode)) {
+            sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403);
+            return;
+          }
+          try {
+            ttsDailyCheck(ttsCfg().dailyLimit);
+            voiceBudgetCheck(key, voice); // 先做一次快速失败，真正记账在 sendVoiceForV2 里
+            const startedAt = Date.now();
+            const made = await ttsSynthesize({
+              text: body.text,
+              mode: body.mode,
+              voiceDesign: body.voiceDesign,
+              refAudio: body.refAudio,
+              refText: body.refText,
+              instruction: body.instruction,
+              speed: body.speed,
+              cfgScale: body.cfgScale,
+              // AI 通道按会话 key 取私聊/群聊默认音色。
+              sessionKey: key
+            });
+            const sent = await sendVoiceForV2(key, made.relPath, {
+              label: body.label ? String(body.label).slice(0, 100) : `[语音 ${made.text.slice(0, 20)}]`,
+              verify: body.verify,
+              readback: body.readback === true,
+              audio: null
+            });
+            ttsDailyCommit();
+            appendActivity(`${key} [tts] 合成并发送 ${made.text.length} 字（${made.durationSec ?? '?'}s / ${formatBytes(made.bytes)} / ${Date.now() - startedAt}ms${made.cached ? '，命中已有产物' : ''}）`);
+            sendJson({
+              ok: true,
+              key,
+              messageId: sent.messageId,
+              verified: sent.verification?.confirmed === true,
+              text: made.text,
+              bytes: made.bytes,
+              durationSec: made.durationSec,
+              synthMs: Date.now() - startedAt,
+              detail: sent.detail
+            });
+          } catch (error) {
+            const code = error?.code ?? TTS_CODES.ENGINE_ERROR;
+            log(`[tts] ${key} 合成并发送失败：${code} ${error?.message ?? error}`);
+            // fallbackToText：把错误原样回给模型，由它改回打字（这里不发任何东西）
+            const hint = ttsCfg().fallbackToText ? '（本次没有发出语音，请直接用文字回复）' : '';
+            sendJson({ ok: false, error: `${error?.message ?? String(error)}${hint}`, code, fallbackToText: ttsCfg().fallbackToText }, 500);
           }
           return;
         }
@@ -14959,6 +15493,8 @@ ${roleText ? `【角色设定】\n${roleText}\n\n` : ''}${recentText ? `【最�
   startDshWatch();
   startSnowlumaWatch();
   startConsoleServer();
+  // 启动时清一次过期的合成产物（keepDays=0 时什么都不做）。
+  try { ttsCleanup(); } catch (error) { log('[tts] 启动清理失败:', error?.message ?? error); }
 
   await pumpMux();
 }

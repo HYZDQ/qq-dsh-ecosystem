@@ -9,11 +9,12 @@ import { CommentDuty, sanitizeReply, validateCommentDutyConfig, COMMENT_DUTY_DEF
 
 const T0 = Date.parse('2026-10-29T12:00:00Z');
 
-function fixture(t, { config = {}, atMe = [], comments = {}, gen, clock } = {}) {
+function fixture(t, { config = {}, atMe = [], comments = {}, gen, clock, frames } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'comment-duty-'));
   t.after(() => { const target = path.resolve(dir); if (!target.startsWith(path.resolve(os.tmpdir()) + path.sep)) throw new Error('测试目录越界。'); fs.rmSync(dir, { recursive: true, force: true }); });
-  const published = [], asked = [], notified = [];
+  const published = [], asked = [], notified = [], captures = [], genArgs = [];
   let now = T0;
+  const fallbackGen = async () => ({ reply: '合成回复', needExpert: false, question: '' });
   const duty = new CommentDuty({
     stateDir: dir,
     browse: async (fn) => fn({}),
@@ -21,14 +22,15 @@ function fixture(t, { config = {}, atMe = [], comments = {}, gen, clock } = {}) 
     askDoubao: async (input) => { asked.push(input); return { ok: true, sent: true, cid: 'ask-1', verified: true }; },
     fetchComments: async (_cdp, awemeId) => comments[awemeId] || { ok: true, comments: [] },
     fetchAtMe: async () => ({ ok: true, items: atMe }),
-    generate: gen || (async () => ({ reply: '合成回复', needExpert: false, question: '' })),
+    captureFrames: frames ? async ({ awemeId }) => { captures.push(awemeId); return frames; } : undefined,
+    generate: async (input) => { genArgs.push(input); return (gen || fallbackGen)(input); },
     notify: async (text) => { notified.push(String(text)); },
     now: () => clock ? clock() : now,
     onEvent: () => {},
   });
   duty.configure({ ...config }, { explicit: true });
   duty.clearTimer(); // 测试手动 tick，不开定时器
-  return { duty, published, asked, notified, advance: (ms) => { now += ms }, dir };
+  return { duty, published, asked, notified, captures, genArgs, advance: (ms) => { now += ms }, dir };
 }
 
 test('配置校验：0 之外的非法值拒绝，未知键拒绝，默认值符合使用者决策', () => {
@@ -159,4 +161,17 @@ test('说停即停：stop 关总开关并停循环', async t => {
   assert.equal(stopped.running, false);
   await f.duty.tick();
   assert.equal(f.published.length, 0);
+});
+
+test('画面采样：回复前抓帧进生成上下文；超时兜底不走模型不抓帧', async t => {
+  const f = fixture(t, {
+    config: { ownerNick: '主人' },
+    atMe: [{ nid: 'n1', type: 45, user: '主人', text: '画面里是什么', aweme_id: '123', comment_id: 'c1', create_time: T0 }],
+    comments: { '123': { ok: true, comments: [{ cid: 'c1', user: '主人', text: '画面里是什么', replies: [] }] } },
+    frames: [{ mimeType: 'image/jpeg', data: 'aGk=' }],
+  });
+  await f.duty.tick();
+  assert.deepEqual(f.captures, ['123']);
+  assert.equal(f.genArgs[0].frames.length, 1);
+  assert.equal(f.genArgs[0].frames[0].mimeType, 'image/jpeg');
 });

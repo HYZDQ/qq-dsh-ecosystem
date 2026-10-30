@@ -369,6 +369,27 @@
       "maxCount": 5
     }
   },
+  "tts": {
+    "enabled": false,
+    "baseUrl": "http://127.0.0.1:18100",
+    "timeoutMs": 180000,
+    "maxChars": 120,
+    "outDir": "audio/tts",
+    "mode": "design",
+    "voiceDesign": "一位温柔自信的年轻女性，声音清晰，语气亲切，表达轻快而富有感染力。",
+    "voice": "",
+    "voicePrivate": "",
+    "voiceGroup": "",
+    "refAudio": "",
+    "refText": "",
+    "instruction": "",
+    "cfgScale": 4,
+    "speed": 1,
+    "keepDays": 7,
+    "fallbackToText": true,
+    "allowProactive": false,
+    "dailyLimit": 0
+  },
   "imageSearch": {
     "enabled": true,
     "providers": [
